@@ -12,7 +12,23 @@ services:
     build:
       context: .
     ports:
-      - 8000:8000
+      - 8080:8080
+    volumes:
+      - ./.env:/app/.env
+      - ./data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_SERVICE_ACCOUNT_FILE=${GOOGLE_SERVICE_ACCOUNT_FILE}
+      - GOOGLE_CREDENTIALS_JSON=${GOOGLE_CREDENTIALS_JSON}
+      - GOOGLE_SHEET_ID=${GOOGLE_SHEET_ID}
+      - GOOGLE_FOLDER_ID=${GOOGLE_FOLDER_ID}
+      - ACCESS_TOKEN=${ACCESS_TOKEN}
+      - APP_SECRET=${APP_SECRET}
+      - RECIPIENT_WAID=${RECIPIENT_WAID}
+      - VERSION=${VERSION}
+      - PHONE_NUMBER_ID=${PHONE_NUMBER_ID}
+      - VERIFY_TOKEN=${VERIFY_TOKEN}
 
 # The commented out section below is an example of how to define a PostgreSQL
 # database that your application can use. `depends_on` tells Docker Compose to

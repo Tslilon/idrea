@@ -4,10 +4,22 @@ import os
 import json
 import requests
 import re
+import shelve
+import uuid
+from flask import request
 
 from flask import current_app, jsonify
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from google.oauth2.credentials import Credentials
+from googleapiclient.errors import HttpError
+
+# Import our new receipt extraction service
+from app.services.receipt_extraction_service import (
+    extract_receipt_details,
+    format_extracted_details_for_whatsapp,
+    prepare_for_google_sheets
+)
 
 # Additional imports and code
 # from app.services.openai_service import generate_response
@@ -118,132 +130,117 @@ def upload_image_to_drive(credentials, folder_id, file_path, file_name):
     return file.get('id')
 
 
-def process_whatsapp_message(body):
-    name = body["entry"][0]["changes"][0]["value"]["contacts"][0]["profile"]["name"]
-    sender_waid = body["entry"][0]["changes"][0]["value"]["contacts"][0]["wa_id"]
-    sender_waid = f"+{sender_waid}"
-
-    # OpenAI Integration
-    # wa_id = body["entry"][0]["changes"][0]["value"]["contacts"][0]["wa_id"]
-    # response = generate_response(message_body, wa_id, name)
-    # response = process_text_for_whatsapp(response)
-
-    creds = load_credentials()
-    folder_id = os.getenv("GOOGLE_FOLDER_ID")
-
-    entry = body["entry"][0]
-    changes = entry["changes"][0]
-    message_data = changes["value"]
-    message_type = message_data["messages"][0].get("type")
-
-    if message_type == "document":
-        document_info = message_data["messages"][0]["document"]
-        # print(document_info)
-        document_caption = document_info.get("caption")
-        filename = document_info.get("filename")
-        document_id = document_info.get("id")
-
-        if document_caption:
-            file_name = document_caption
-        else:
-            file_name = filename
-
-        # Update the admins:
-        update_admins(f"{name} sent a document ({file_name})", sender_waid)
-
-        document_url = get_document_url_from_whatsapp(document_id)  # Implement this function
-
-        document_response = download_document(document_url)
-
-        if document_response.status_code == 200:
-            temp_document_path = os.path.join('data/temp_receipts/', file_name)
-
-            # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(temp_document_path), exist_ok=True)
-
-            with open(temp_document_path, 'wb') as file:
-                file.write(document_response.content)
-
-            upload_document_to_drive(creds, folder_id, temp_document_path, file_name)
-
-            os.remove(temp_document_path)
-            # Send success message
-            text = f'Saved file! (#{file_name})'
-            data = get_text_message_input(sender_waid, text)
-            send_message(data)
-            # Update the admins:
-            update_admins(text, sender_waid)
-
-        else:
-            print('error downloading document')  # Handle failure to download document
-            # Send an error message to the user or log the error
-            data = get_text_message_input(sender_waid, f'Error saving file')
-            send_message(data)
-
-    elif message_type == "image":
-
-        # Handle image message
-        image_info = message_data["messages"][0]["image"]
-        image_id = image_info.get("id")
-        image_caption = image_info.get("caption")
-
-        if image_caption:
-            # Process the caption as a text message
-            file_name = image_caption
-        else:
-            file_name = image_id
-
-        # Update the admins:
-        update_admins(f"{name} sent an image ({file_name})", sender_waid)
-
-        image_url = get_image_url_from_whatsapp(image_id)  # Implement this function
-
-        def download_image(image_url):
-            headers = {
-                "Authorization": f"Bearer {os.getenv('ACCESS_TOKEN')}",
-            }
-
-            response = requests.get(image_url, headers=headers)
-            return response
-
-        # Download the image
-        image_response = download_image(image_url)
-
-        if image_response.status_code == 200:
-
-            # Save the image to a temporary file
-            temp_image_path = os.path.join('data/temp_receipts/', file_name)
-            with open(temp_image_path, 'wb') as file:
-                file.write(image_response.content)
-
-            # Upload the image to Google Drive
-            upload_image_to_drive(creds, folder_id, temp_image_path, file_name)
-
-            # Optionally, delete the temporary image file after upload
-            os.remove(temp_image_path)
-            text = f'Receipt added to our folder! (#{file_name})'
-            data = get_text_message_input(sender_waid, text)
-            send_message(data)
-
-            update_admins(text, sender_waid)
-
-        else:
-            # Send an error message to the user or log the error
-            print(f"Failed to download image. Status Code: {image_response.status_code}")
-            print(f"Response Content: {image_response.content}")
-    else:
-        message = body["entry"][0]["changes"][0]["value"]["messages"][0]
-
+def process_whatsapp_message(message, phone_number_id):
+    """
+    Process a WhatsApp message.
+    
+    Args:
+        message: The message object
+        phone_number_id: The phone number ID to use for sending responses
+    """
+    try:
+        # Log the message for debugging
+        logging.info(f"Processing message: {json.dumps(message, indent=2)}")
+        
+        # Check if the message is valid
+        if not is_valid_whatsapp_message(message):
+            logging.error("Invalid message format")
+            return
+        
+        # Get the sender's WhatsApp ID
+        sender_waid = message.get("from")
+        if not sender_waid:
+            logging.error("No sender ID found in the message")
+            return
+        
+        # Format the sender ID with a plus sign if needed
+        if not sender_waid.startswith("+"):
+            sender_waid = f"+{sender_waid}"
+        
+        # Load credentials for Google services
+        creds = load_credentials()
+        folder_id = os.getenv("GOOGLE_FOLDER_ID")
+        sheet_id = os.getenv("GOOGLE_SHEET_ID")
+        
+        # Get the message type
+        message_type = message.get("type")
+        
+        # Get contact information if available
+        # Try to get the actual name from the contacts field if available
+        name = "User"  # Default name
+        
         try:
-            text = message["text"]["body"]
-        except KeyError:
-            text = 'EMPTY MSG'
-            print('empty message sent (message["text"]["body"]) has no text')
-
-        # Update the admins:
-        update_admins(f"{name} sent:\n\n{text}", sender_waid)
-
-        process_text_message(text, name, creds, sender_waid)
+            # Extract name from the contacts field
+            contacts = message.get("contacts", [])
+            if contacts and len(contacts) > 0:
+                profile = contacts[0].get("profile", {})
+                if profile and "name" in profile:
+                    name = profile["name"]
+                    logging.info(f"Found contact name from message: {name}")
+            
+            # If we didn't find the name in the message directly, it might be in the parent data structure
+            if name == "User" and hasattr(request, 'json') and request.json:
+                data = request.json
+                if "entry" in data and len(data["entry"]) > 0:
+                    entry = data["entry"][0]
+                    if "changes" in entry and len(entry["changes"]) > 0:
+                        change = entry["changes"][0]
+                        if "value" in change and "contacts" in change["value"] and len(change["value"]["contacts"]) > 0:
+                            profile = change["value"]["contacts"][0].get("profile", {})
+                            if profile and "name" in profile:
+                                name = profile["name"]
+                                logging.info(f"Found contact name from request: {name}")
+        except Exception as e:
+            logging.error(f"Error getting contact name: {str(e)}")
+        
+        logging.info(f"Using name: {name} for sender: {sender_waid}")
+        
+        # Process different message types
+        if message_type == "text":
+            # Handle text message
+            try:
+                text = message["text"]["body"]
+                logging.info(f"Received text message: {text}")
+                
+                # Update the admins
+                update_admins(f"{name} sent:\n\n{text}", sender_waid)
+                
+                # Process the text message
+                process_text_message(text, name, creds, sender_waid)
+            except Exception as e:
+                logging.error(f"Error processing text message: {str(e)}")
+                data = get_text_message_input(sender_waid, "I encountered an error while processing your message. Please try again.")
+                send_message(data)
+        
+        elif message_type == "image":
+            # Handle image message
+            try:
+                logging.info("Processing image message")
+                process_image_message(message, name, creds, sender_waid, folder_id)
+            except Exception as e:
+                logging.error(f"Error processing image message: {str(e)}")
+                data = get_text_message_input(sender_waid, "I encountered an error while processing your image. Please try again.")
+                send_message(data)
+        
+        elif message_type == "document":
+            # Handle document message
+            try:
+                logging.info("Processing document message")
+                process_document_message(message, name, creds, sender_waid, folder_id)
+            except Exception as e:
+                logging.error(f"Error processing document message: {str(e)}")
+                data = get_text_message_input(sender_waid, "I encountered an error while processing your document. Please try again.")
+                send_message(data)
+        
+        else:
+            # Handle unsupported message type
+            logging.warning(f"Unsupported message type: {message_type}")
+            data = get_text_message_input(sender_waid, "I don't support this type of message yet. Please send a text message, image, or document.")
+            send_message(data)
+    
+    except Exception as e:
+        logging.error(f"Error processing WhatsApp message: {str(e)}")
+        return
 
 
 def get_document_url_from_whatsapp(document_id):
@@ -256,18 +253,29 @@ def get_document_url_from_whatsapp(document_id):
     Returns:
     str: The URL of the document, or None if the request fails.
     """
-    url = f"https://graph.facebook.com/v18.0/{document_id}"  # Update API version as needed
+    url = f"https://graph.facebook.com/v20.0/{document_id}"  # Updated to v20.0
     headers = {
         "Authorization": f"Bearer {os.getenv('ACCESS_TOKEN')}",
     }
 
-    response = requests.get(url, headers=headers)
-
-    if response.status_code == 200:
-        document_data = response.json()
-        return document_data.get("url")  # Or the appropriate key based on the response
-    else:
-        logging.error(f"Error fetching document URL: {response.status_code}")
+    try:
+        logging.info(f"Fetching document URL for document ID: {document_id}")
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            document_data = response.json()
+            document_url = document_data.get("url")
+            if document_url:
+                logging.info(f"Successfully retrieved document URL (first 50 chars): {document_url[:50]}...")
+                return document_url
+            else:
+                logging.error(f"No URL found in the response: {document_data}")
+                return None
+        else:
+            logging.error(f"Error fetching document URL: Status code {response.status_code}, Response: {response.text[:200]}")
+            return None
+    except Exception as e:
+        logging.error(f"Exception fetching document URL: {str(e)}")
         return None
 
 
@@ -295,93 +303,418 @@ def download_document(document_url):
     """
     headers = {
         "Authorization": f"Bearer {os.getenv('ACCESS_TOKEN')}",
+        "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
     }
 
     try:
-        response = requests.get(document_url, headers=headers)
-        response.raise_for_status()  # Raises an HTTPError for bad requests
+        logging.info(f"Downloading document from URL (first 50 chars): {document_url[:50]}...")
+        response = requests.get(document_url, headers=headers, timeout=30, stream=True)
+        
+        if response.status_code == 200:
+            content_type = response.headers.get('Content-Type', '')
+            logging.info(f"Downloaded content type: {content_type}")
+            
+            if 'text/html' in content_type:
+                logging.error(f"Received HTML instead of document data. Response: {response.text[:200]}")
+                return None
+                
+            return response
+        else:
+            logging.error(f"Failed to download document: Status code {response.status_code}, Response: {response.text[:200]}")
+            return None
     except requests.RequestException as e:
-        logging.error(f"Request failed: {e}")
+        logging.error(f"Request failed during document download: {str(e)}")
         return None
-
-    return response
+    except Exception as e:
+        logging.error(f"Unexpected error during document download: {str(e)}")
+        return None
 
 
 def process_text_message(text, name, creds, sender_waid):
+    """
+    Process a text message from WhatsApp.
+    
+    Args:
+        text: The message text
+        name: The sender's name
+        creds: Google API credentials
+        sender_waid: The sender's WhatsApp ID
+    """
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
-
-    # Check format and generate response
-    response = generate_response(text)
-
-    if response == "Processing your update...":
-        # Parse the message
-        parts = text.split('\n')
-        update_data = [name]
-
-        for part in parts:
-            key, _, value = part.partition(':')
-            key = key.strip()
-            # print(key)
-            value = value.strip()
-
-            if (key == "Amount") | (key == "IVA"):
-                # Replace comma with period for decimal
-                value = value.replace(',', '.')
-                # Remove the last character if it is a period
-                if value.endswith('.'):
-                    value = value[:-1]
-                # If there are two periods, remove the first one
-                if value.count('.') == 2:
-                    first_period_index = value.find('.')
-                    value = value[:first_period_index] + value[first_period_index + 1:]
-
-                # Extract only digits and decimal points
-                value = re.sub(r'[^\d.]+', '', value)
-                try:
-                    # Convert to float
-                    value = float(value)
-                except ValueError:
-                    # Handle cases where conversion to float fails
-                    value = value  # or any other default value or action
-
-            update_data.append(value)
-
+    logging.info(f"Processing text message: '{text}' from {sender_waid}, name: {name}")
+    
+    # Check if we have stored receipt details for this user
+    stored_receipt = get_stored_receipt(sender_waid)
+    
+    # Handle confirmation responses
+    text_lower = text.lower().strip()
+    if stored_receipt and (text_lower in ["confirm", "yes"]):
+        # User is confirming extracted receipt details
+        logging.info("User confirming receipt details")
+        
+        # Get the receipt number that was created earlier
+        # Prepare the data from previously extracted receipt
+        update_data = [stored_receipt.get("sender_name", name)]  # Use stored name or fallback to current name
+        
+        fields_to_process = ["what", "amount", "iva", "receipt", "store_name", "payment_method", "charge_to", "comments"]
+        for field in fields_to_process:
+            update_data.append(stored_receipt.get(field, ""))
+        
+        # Remove the stored receipt
+        delete_stored_receipt(sender_waid)
+        
         # Write to Google Sheets
         receipt_num = append_to_sheet(creds, sheet_id, update_data)
+        
+        # Send confirmation
+        confirm_message = f"Thank you! I've saved your receipt details. Your receipt number is {receipt_num}."
+        data = get_text_message_input(sender_waid, confirm_message)
+        send_message(data)
+        
+        # Update admins
+        admin_message = f"{name} confirmed receipt details. Receipt {receipt_num} added to spreadsheet."
+        update_admins(admin_message, sender_waid)
+        
+        return
+    
+    # Handle cancellation responses
+    elif stored_receipt and (text_lower in ["cancel", "no"]):
+        # User wants to cancel the receipt
+        logging.info("User cancelling receipt")
+        
+        # Remove the stored receipt
+        delete_stored_receipt(sender_waid)
+        
+        # Send confirmation of cancellation
+        cancel_message = "I've cancelled this receipt. No information was saved."
+        data = get_text_message_input(sender_waid, cancel_message)
+        send_message(data)
+        
+        # Update admins
+        admin_message = f"{name} cancelled their receipt submission."
+        update_admins(admin_message, sender_waid)
+        
+        return
+    
+    # Handle field updates for an existing receipt
+    elif stored_receipt and not (text_lower in ["confirm", "yes", "cancel", "no"]):
+        # User is providing updates to receipt fields
+        logging.info("User providing receipt detail updates")
+        
+        # Check for field patterns like "Field: value"
+        updates = {}
+        lines = text.split('\n')
+        
+        for line in lines:
+            # Look for field: value patterns
+            match = re.match(r'(.*?):\s*(.*)', line.strip())
+            if match:
+                field_name = match.group(1).strip().lower()
+                field_value = match.group(2).strip()
+                
+                # Map user-friendly field names to internal names
+                field_mapping = {
+                    "what": "what",
+                    "amount": "amount",
+                    "iva": "iva",
+                    "store name": "store_name",
+                    "payment method": "payment_method",
+                    "charge to": "charge_to", 
+                    "comments": "comments"
+                }
+                
+                if field_name in field_mapping:
+                    normalized_field = field_mapping[field_name]
+                    
+                    # Format amount and IVA fields to ensure proper number formatting
+                    if field_name in ["amount", "iva"]:
+                        try:
+                            # Try to parse as number and format
+                            clean_value = field_value.replace('€', '').replace(',', '.').strip()
+                            value_float = float(clean_value)
+                            field_value = f"{value_float:.2f} €"
+                        except ValueError:
+                            # If not a valid number, keep as is but log
+                            logging.warning(f"Invalid number format for {field_name}: {field_value}")
+                    
+                    updates[normalized_field] = field_value
+                    logging.info(f"Updating field {normalized_field} to {field_value}")
+        
+        # Update the stored receipt with the new values
+        if updates:
+            current_receipt = get_stored_receipt(sender_waid)
+            for field, value in updates.items():
+                current_receipt[field] = value
+            store_extracted_receipt(sender_waid, current_receipt)
+            
+            # Format the updated receipt details
+            updated_message = format_extracted_details_for_whatsapp(current_receipt)
+            
+            # Show what fields were updated
+            changes = [f"✓ {field.title().replace('_', ' ')}: {value}" for field, value in updates.items()]
+            update_confirmation = "Updated:\n" + "\n".join(changes)
+            
+            response = (
+                f"{update_confirmation}\n\n"
+                f"Updated receipt details:\n\n"
+                f"{updated_message}\n\n"
+                f"Reply \"yes\" or \"confirm\" to finalize or continue editing."
+            )
+            data = get_text_message_input(sender_waid, response)
+            send_message(data)
+            
+            return
+        else:
+            # No valid fields found to update
+            response = (
+                f"I couldn't identify any fields to update. Please use this format:\n\n"
+                f"Payment method: [cash/card/transfer]\n"
+                f"Charge to: [personal/company/project]\n"
+                f"Comments: [any additional notes]"
+            )
+            data = get_text_message_input(sender_waid, response)
+            send_message(data)
+            
+            return
 
-        text = f'Update added to our list! (#{receipt_num})'
+    # Define field mappings for flexible matching
+    field_mappings = {
+        "what": "What",
+        "amount": "Amount",
+        "amount (euros)": "Amount",
+        "iva": "IVA",
+        "iva (euros)": "IVA",
+        "receipt": "Receipt",
+        "store name": "Store name",
+        "payment method": "Payment method",
+        "charge to": "Charge to",
+        "comments": "Comments"
+    }
+    
+    # Check if this looks like a receipt form submission - use case-insensitive matching
+    form_fields = ["what", "amount", "store name"]
+    form_detected = sum(1 for field in form_fields if field in text_lower) >= 2
+    
+    logging.info(f"Form detected: {form_detected}")
+    
+    if form_detected:
+        # This looks like a form submission, so parse it and save to Google Sheets
+        parts = text.split('\n')
+        update_data = [name]  # Use the actual name from WhatsApp
+        
+        logging.info(f"Form detected. Using sender name: {name}")
+        
+        # Create a dictionary to store the parsed fields
+        parsed_data = {}
+        for part in parts:
+            if not part.strip():
+                continue
+                
+            # Find the partition between key and value
+            partition_index = part.find(':')
+            if partition_index == -1:
+                continue
+                
+            # Extract key and value
+            key = part[:partition_index].strip()
+            value = part[partition_index+1:].strip()
+            
+            # Skip if value is empty
+            if not value:
+                continue
+                
+            # Clean up the key (remove formatting)
+            key = key.replace('*', '')
+            
+            # Normalize the key using our mappings (case-insensitive)
+            key_lower = key.lower()
+            if key_lower in field_mappings:
+                normalized_key = field_mappings[key_lower]
+                parsed_data[normalized_key] = value
+                logging.info(f"Mapped field '{key}' to '{normalized_key}' with value '{value}'")
+            else:
+                # If no mapping found, use the original key
+                parsed_data[key] = value
+                logging.info(f"Using original field '{key}' with value '{value}'")
+        
+        # Check if we have the minimal required fields
+        required_fields = ["What", "Amount"]
+        missing_fields = [field for field in required_fields if field not in parsed_data]
+        
+        if missing_fields:
+            # Send message about missing fields
+            missing_text = ", ".join(missing_fields)
+            text = f"Please provide the missing fields: {missing_text}. Your form submission is incomplete."
+            data = get_text_message_input(sender_waid, text)
+            send_message(data)
+            return
+        
+        # Process the data for Google Sheets
+        fields_to_process = ["What", "Amount", "IVA", "Receipt", "Store name", "Payment method", "Charge to", "Comments"]
+        
+        for field in fields_to_process:
+            value = parsed_data.get(field, "")
+            
+            # Process numeric fields - but don't convert format here, just clean up
+            # The conversion to European format will happen in append_to_sheet
+            if field in ["Amount", "IVA"] and value:
+                # Clean up any text around numbers
+                # We'll leave the actual number formatting (commas/periods) as is
+                # Just remove currency symbols and other non-numeric chars except . and ,
+                value = re.sub(r'[^\d.,\-]', '', value)
+                
+                # If value starts with a comma or period, add a 0 before it
+                if value.startswith('.') or value.startswith(','):
+                    value = '0' + value
+                
+                # If value ends with a comma or period, remove it
+                if value.endswith('.') or value.endswith(','):
+                    value = value[:-1]
+            
+            update_data.append(value)
+        
+        # Write to Google Sheets
+        receipt_num = append_to_sheet(creds, sheet_id, update_data)
+        
+        # Send confirmation to user with receipt number
+        text = f'Receipt details saved! Receipt #{receipt_num} has been added to our system. If you have a receipt image/pdf, please send it with "{receipt_num}" in the caption.'
         data = get_text_message_input(sender_waid, text)
         send_message(data)
-
-        # Update the admins:
-        update_admins(text, sender_waid)
-
+        
+        # Update admins
+        update_admins(f"Receipt #{receipt_num} added by {name}", sender_waid)
+        
+        # Clean up any stored receipt details
+        delete_stored_receipt(sender_waid)
     else:
-
-        data = ("*What*: \n"
+        # If it's not a form submission, send the form template
+        logging.info(f"Sending form template to {sender_waid}")
+        template_message = ("Please provide the receipt details in the following format:\n\n"
+                "*What*: \n"
                 "*Amount* (euros): \n"
                 "IVA (euros): \n"
-                "Receipt: yes \n"
+                "Receipt: yes\n"
                 "Store name: \n"
                 "Payment method: \n"
                 "Charge to: \n"
-                "Comments: \n\n"
-                "Knock-Knock! _Who's there?_ The IT guy! 👋")
-        data = get_text_message_input(sender_waid, data)
-        send_message(data)
+                "Comments: \n")
+        logging.info(f"Template message: {template_message[:50]}...")
+        data = get_text_message_input(sender_waid, template_message)
+        response = send_message(data)
+        logging.info(f"Template message response: {response.status_code}")
+        logging.info(f"Template message response body: {response.text[:100]}")
 
 
-def is_valid_whatsapp_message(body):
+def parse_manual_receipt_entry(text):
     """
-    Check if the incoming webhook event has a valid WhatsApp message structure.
+    Parse a manual receipt entry from the user.
+    Expected format is a series of lines with "Field: Value"
+    
+    Args:
+        text: The message text from the user
+        
+    Returns:
+        Dictionary with parsed receipt details
     """
+    # Define field mappings (WhatsApp field name -> internal field name)
+    field_mappings = {
+        "Store name": "store_name",
+        "Amount": "total_amount",
+        "IVA": "iva",
+        "Receipt": "has_receipt",
+        "Payment method": "payment_method",
+        "Charge to": "charge_to",
+        "Comments": "comments",
+        "Date": "date",
+        "What": "description"
+    }
+    
+    # Initialize result dictionary
+    result = {}
+    
+    # Split text into lines
+    lines = text.split('\n')
+    
+    # Process each line
+    for line in lines:
+        # Skip empty lines
+        if not line.strip():
+            continue
+            
+        # Find the partition between key and value
+        partition_index = line.find(':')
+        if partition_index == -1:
+            continue
+            
+        # Extract key and value
+        key = line[:partition_index].strip()
+        value = line[partition_index+1:].strip()
+        
+        # Skip if either key or value is empty
+        if not key or not value:
+            continue
+            
+        # Remove any formatting like * for bold
+        key = key.replace('*', '')
+        
+        # Map the field name if possible
+        internal_key = field_mappings.get(key)
+        if not internal_key:
+            # Try case-insensitive match
+            for k, v in field_mappings.items():
+                if k.lower() == key.lower():
+                    internal_key = v
+                    break
+                    
+        if not internal_key:
+            # Still not found, just use the key directly
+            internal_key = key.lower().replace(' ', '_')
+            
+        # Process special fields
+        if internal_key == "total_amount" or internal_key == "iva":
+            # Replace comma with period for decimal
+            value = value.replace(',', '.')
+            # Remove the last character if it is a period
+            if value.endswith('.'):
+                value = value[:-1]
+            # If there are two periods, remove the first one
+            if value.count('.') == 2:
+                first_period_index = value.find('.')
+                value = value[:first_period_index] + value[first_period_index + 1:]
+            # Remove non-numeric characters
+            value = re.sub(r'[^\d.]+', '', value)
+                
+        elif internal_key == "has_receipt":
+            # Convert yes/no or true/false to boolean
+            value = value.lower() in ["yes", "true", "1", "y"]
+            
+        # Store the value
+        result[internal_key] = value
+        
+    return result
+
+
+def is_valid_whatsapp_message(message):
+    """
+    Check if the message object has a valid WhatsApp message structure.
+    
+    Args:
+        message: A single message object from the webhook payload
+        
+    Returns:
+        bool: True if the message has a valid structure, False otherwise
+    """
+    # Check if the message has the required fields
     return (
-            body.get("object")
-            and body.get("entry")
-            and body["entry"][0].get("changes")
-            and body["entry"][0]["changes"][0].get("value")
-            and body["entry"][0]["changes"][0]["value"].get("messages")
-            and body["entry"][0]["changes"][0]["value"]["messages"][0]
+        isinstance(message, dict) and
+        message.get("from") and
+        (
+            (message.get("type") == "text" and message.get("text")) or
+            (message.get("type") == "image" and message.get("image")) or
+            (message.get("type") == "document" and message.get("document")) or
+            (message.get("type") == "audio" and message.get("audio")) or
+            (message.get("type") == "video" and message.get("video"))
+        )
     )
 
 
@@ -464,10 +797,78 @@ def append_to_sheet(credentials, sheet_id, values_list):
 
     # Get the next receipt number
     next_receipt_number = get_receipt_number(credentials, sheet_id)
+    
+    # Process numeric values to ensure they're correctly formatted for European style
+    # (comma as decimal separator, period as thousand separator)
+    processed_values = []
+    for value in values_list:
+        if isinstance(value, str):
+            # Check if this looks like a numeric value
+            # First, standardize to US format (period as decimal) for processing
+            cleaned_value = value.strip()
+            
+            # If there are both commas and periods, we need to determine which is the decimal separator
+            if ',' in cleaned_value and '.' in cleaned_value:
+                # In input with both separators, typically the last one is the decimal separator
+                if cleaned_value.rfind(',') > cleaned_value.rfind('.'):
+                    # Last separator is comma, which suggests European format originally
+                    # First remove all periods (thousand separators)
+                    no_thousand_sep = cleaned_value.replace('.', '')
+                    # Then replace comma with period for standard processing
+                    cleaned_value = no_thousand_sep.replace(',', '.')
+                else:
+                    # Last separator is period, which suggests US format originally
+                    # First remove all commas (thousand separators)
+                    cleaned_value = cleaned_value.replace(',', '')
+            else:
+                # Only one type of separator
+                # Convert comma to period for standard processing
+                cleaned_value = cleaned_value.replace(',', '.')
+            
+            # Now check if it's a valid number
+            if cleaned_value and (cleaned_value.replace('.', '', 1).isdigit() or 
+                                (cleaned_value.startswith('-') and cleaned_value[1:].replace('.', '', 1).isdigit())):
+                # If there are multiple periods, keep only the last one (assumed to be decimal separator)
+                if cleaned_value.count('.') > 1:
+                    parts = cleaned_value.split('.')
+                    cleaned_value = ''.join(parts[:-1]) + '.' + parts[-1]
+                
+                # Convert to European format
+                try:
+                    # Parse as float for standardization
+                    num_value = float(cleaned_value)
+                    
+                    # Format with European style - comma as decimal separator
+                    # For integers, don't show decimal part
+                    if num_value.is_integer():
+                        euro_format = f"{int(num_value):,}".replace(',', '.')
+                    else:
+                        # Convert to a string that preserves the original decimal places
+                        # Get the number of decimal places in the original value
+                        decimal_part = str(num_value).split('.')[1] if '.' in str(num_value) else ''
+                        decimal_places = len(decimal_part)
+                        
+                        # Format with original decimal places (no rounding)
+                        format_str = f"{{:,.{decimal_places}f}}".replace(',', 'X').replace('.', ',').replace('X', '.')
+                        euro_format = format_str.format(num_value)
+                    
+                    processed_values.append(euro_format)
+                    logging.info(f"Formatted number (preserving decimals): {value} -> {euro_format}")
+                except ValueError:
+                    # If conversion fails, keep the original
+                    processed_values.append(value)
+                    logging.info(f"Could not convert to number, keeping original: {value}")
+            else:
+                processed_values.append(value)  # Keep as string
+        else:
+            processed_values.append(value)  # Non-string values
 
     # Prepare the data to append.
-    values = [next_receipt_number, time] + values_list
+    values = [next_receipt_number, time] + processed_values
     body = {'values': [values]}
+
+    # Log the values being sent to Google Sheets
+    logging.info(f"Appending to Google Sheet: {values}")
 
     # Call the Sheets API
     result = service.spreadsheets().values().append(
@@ -476,7 +877,7 @@ def append_to_sheet(credentials, sheet_id, values_list):
         valueInputOption='USER_ENTERED',
         body=body).execute()
 
-    print(f"{result.get('updates').get('updatedCells')} cells appended.")
+    logging.info(f"{result.get('updates').get('updatedCells')} cells appended.")
     return next_receipt_number
 
 
@@ -491,24 +892,444 @@ def get_image_url_from_whatsapp(image_id):
     Returns:
     str: The URL of the image.
     """
-    url = f"https://graph.facebook.com/v18.0/{image_id}"  # Update API version as needed
-    # print(url)
+    url = f"https://graph.facebook.com/v20.0/{image_id}"  # Updated to v20.0
     headers = {
         "Authorization": f"Bearer {os.getenv('ACCESS_TOKEN')}",
     }
 
-    response = requests.get(url, headers=headers)
-    # print('response: ')
-    # print(response)
-
-    if response.status_code == 200:
-        image_data = response.json()
-        # print('image_data: ')
-        # print(image_data['id'])
-
-        # The exact key for the image URL depends on the API's response structure
-        return image_data.get("url")  # Or the appropriate key based on the response
-    else:
-        # Log error or handle it as per your requirement
-        print(f"Error fetching image URL: {response.status_code}")
+    try:
+        logging.info(f"Fetching image URL for image ID: {image_id}")
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            image_data = response.json()
+            image_url = image_data.get("url")
+            if image_url:
+                logging.info(f"Successfully retrieved image URL (first 50 chars): {image_url[:50]}...")
+                return image_url
+            else:
+                logging.error(f"No URL found in the response: {image_data}")
+                return None
+        else:
+            logging.error(f"Error fetching image URL: Status code {response.status_code}, Response: {response.text[:200]}")
+            return None
+    except Exception as e:
+        logging.error(f"Exception fetching image URL: {str(e)}")
         return None
+
+
+# Remove the receipt storage functions since we won't need approval
+# Instead, we'll store temporary extracted data to assist the user
+
+def store_extracted_receipt(wa_id, receipt_details, sender_name="User"):
+    """Store extracted receipt details for a user
+    
+    Args:
+        wa_id: The WhatsApp ID of the user
+        receipt_details: The receipt details dictionary
+        sender_name: The name of the sender (defaults to "User")
+    """
+    # Add the sender's name to the receipt details
+    receipt_details["sender_name"] = sender_name
+    
+    # Ensure receipt=yes is set
+    receipt_details["receipt"] = "yes"
+    
+    with shelve.open("receipts_db", writeback=True) as receipts_shelf:
+        receipts_shelf[wa_id] = receipt_details
+
+def get_stored_receipt(wa_id):
+    """Retrieve stored receipt details for a user."""
+    with shelve.open("receipts_db") as receipts_shelf:
+        return receipts_shelf.get(wa_id, None)
+
+def delete_stored_receipt(wa_id):
+    """Delete stored receipt details for a user after processing."""
+    with shelve.open("receipts_db", writeback=True) as receipts_shelf:
+        if wa_id in receipts_shelf:
+            del receipts_shelf[wa_id]
+
+
+def process_image_message(message, name, creds, sender_waid, folder_id):
+    """
+    Process an image message from WhatsApp.
+    
+    Args:
+        message: The image message object
+        name: The sender's name
+        creds: Google API credentials
+        sender_waid: The sender's WhatsApp ID
+        folder_id: Google Drive folder ID for storing images
+    """
+    try:
+        # Get image information
+        image_id = message["image"]["id"]
+        caption = message["image"].get("caption", "").strip()
+        
+        logging.info(f"Processing image with ID: {image_id}, Caption: {caption}")
+        
+        # Get the image URL from WhatsApp
+        image_url = get_image_url_from_whatsapp(image_id)
+        
+        if not image_url:
+            logging.error("Failed to get image URL from WhatsApp")
+            data = get_text_message_input(sender_waid, "I couldn't download your image. Please try again.")
+            send_message(data)
+            return
+        
+        # Download the image with proper error handling
+        try:
+            logging.info(f"Downloading image from URL (first 50 chars): {image_url[:50]}...")
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+                "Authorization": f"Bearer {os.getenv('ACCESS_TOKEN')}"
+            }
+            response = requests.get(image_url, headers=headers, timeout=30, stream=True)
+            
+            if response.status_code != 200:
+                logging.error(f"Failed to download image: Status code {response.status_code}, Response: {response.text[:200]}")
+                data = get_text_message_input(sender_waid, "I couldn't download your image. Please try again.")
+                send_message(data)
+                return
+            
+            # Check if we got actual image data
+            content_type = response.headers.get('Content-Type', '')
+            logging.info(f"Downloaded content type: {content_type}")
+            
+            if 'text/html' in content_type:
+                logging.error(f"Received HTML instead of image data. Response: {response.text[:200]}")
+                data = get_text_message_input(sender_waid, "I couldn't download your image. Please try again.")
+                send_message(data)
+                return
+            
+            # Determine file extension based on content type
+            extension = ".jpg"  # Default extension
+            if content_type:
+                if 'image/png' in content_type:
+                    extension = ".png"
+                elif 'image/gif' in content_type:
+                    extension = ".gif"
+                elif 'image/webp' in content_type:
+                    extension = ".webp"
+                elif 'image/jpeg' in content_type:
+                    extension = ".jpg"
+                # Add more mappings as needed
+            
+            # Save the image temporarily
+            temp_dir = "data/temp_receipts"
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # Process differently based on whether a caption was provided or not
+            if caption:
+                # Use the caption directly as part of the filename
+                safe_caption = re.sub(r'[^\w\s-]', '', caption).replace(' ', '_')
+                file_path = os.path.join(temp_dir, f"{safe_caption}{extension}")
+                
+                with open(file_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                
+                logging.info(f"Image saved temporarily to {file_path}")
+                
+                # Upload to Google Drive
+                file_name = f"{safe_caption}{extension}"
+                drive_link = upload_image_to_drive(creds, folder_id, file_path, file_name)
+                
+                if drive_link:
+                    # Send confirmation message
+                    confirmation_message = f"Thank you! Your receipt image for #{safe_caption} has been saved to Google Drive."
+                    data = get_text_message_input(sender_waid, confirmation_message)
+                    send_message(data)
+                    
+                    # Update admins
+                    admin_message = f"{name} sent a receipt image for #{safe_caption}.\nDrive link: {drive_link}"
+                    update_admins(admin_message, sender_waid)
+                else:
+                    data = get_text_message_input(sender_waid, "I couldn't save your receipt image to Google Drive. Please try again.")
+                    send_message(data)
+                
+                # Clean up the temporary file
+                try:
+                    os.remove(file_path)
+                    logging.info(f"Temporary file {file_path} removed")
+                except Exception as e:
+                    logging.error(f"Error removing temporary file: {str(e)}")
+            else:
+                # No caption, process as a new receipt
+                file_path = os.path.join(temp_dir, f"receipt_temp_{uuid.uuid4()}{extension}")
+                
+                with open(file_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                
+                logging.info(f"Image saved temporarily to {file_path}")
+                
+                # Process the image for receipt extraction
+                try:
+                    # Extract receipt details using OCR/AI
+                    from app.services.receipt_extraction_service import extract_receipt_details, format_extracted_details_for_whatsapp
+                    
+                    with open(file_path, "rb") as f:
+                        image_data = f.read()
+                    
+                    receipt_details, error = extract_receipt_details(image_data, "image")
+                    
+                    # Before removing the temp file, upload it to Google Drive
+                    receipt_number = get_receipt_number(creds, os.getenv("GOOGLE_SHEET_ID"))
+                    filename = f"Receipt_{receipt_number}_{datetime.now().strftime('%Y-%m-%d')}{extension}"
+                    
+                    # Upload to Google Drive
+                    drive_link = upload_image_to_drive(creds, folder_id, file_path, filename)
+                    
+                    # Clean up the temporary file
+                    try:
+                        os.remove(file_path)
+                        logging.info(f"Temporary file {file_path} removed")
+                    except Exception as e:
+                        logging.error(f"Error removing temporary file: {str(e)}")
+                    
+                    if error:
+                        logging.error(f"Error extracting receipt details: {error}")
+                        data = get_text_message_input(sender_waid, "I couldn't extract details from your receipt. Please try sending a clearer image or enter the details manually.")
+                        send_message(data)
+                        return
+                    
+                    # Add the Google Drive link to the receipt details
+                    if drive_link:
+                        receipt_details["drive_link"] = drive_link
+                        logging.info(f"Added Drive link to receipt details: {drive_link}")
+                    
+                    # Format the extracted details for WhatsApp
+                    formatted_message = format_extracted_details_for_whatsapp(receipt_details)
+                    
+                    # Get a new receipt number
+                    receipt_number = get_receipt_number(creds, os.getenv("GOOGLE_SHEET_ID"))
+                    
+                    # Store the extracted receipt details for this user
+                    store_extracted_receipt(sender_waid, receipt_details, name)
+                    
+                    # Send the formatted message with the receipt number
+                    confirmation_message = (
+                        f"I've extracted the following details from your receipt:\n\n"
+                        f"{formatted_message}\n\n"
+                        f"Receipt #{receipt_number} has been created.\n\n"
+                        f"✏️ To add or correct information, reply with any of these fields:\n"
+                        f"What:\n"
+                        f"Amount:\n"
+                        f"IVA:\n"
+                        f"Store name:\n"
+                        f"Payment method:\n"
+                        f"Charge to:\n"
+                        f"Comments:\n\n"
+                        f"Include only the fields you want to update.\n"
+                        f"(amount, iva, what, store name, payment method, charge to, comments)\n"
+                        f"✅ To confirm with these partial details, reply \"confirm\" or \"yes\".\n"
+                        f"❌ To cancel, reply \"cancel\" or \"no\".\n\n"
+                    )
+                    data = get_text_message_input(sender_waid, confirmation_message)
+                    send_message(data)
+                    
+                    # Update admins
+                    admin_message = f"{name} sent a receipt image. Details extracted:\n\n{formatted_message}\n\nReceipt {receipt_number} created."
+                    if drive_link:
+                        admin_message += f"\nDrive link: {drive_link}"
+                    update_admins(admin_message, sender_waid)
+                    
+                except Exception as e:
+                    logging.error(f"Error in receipt extraction: {str(e)}")
+                    data = get_text_message_input(sender_waid, "I encountered an error while processing your receipt. Please try again or enter the details manually.")
+                    send_message(data)
+            
+        except Exception as e:
+            logging.error(f"Error downloading image: {str(e)}")
+            data = get_text_message_input(sender_waid, "I couldn't download your image. Please try again.")
+            send_message(data)
+            
+    except Exception as e:
+        logging.error(f"Error processing image message: {str(e)}")
+        data = get_text_message_input(sender_waid, "I couldn't process your image. Please try again.")
+        send_message(data)
+
+
+def process_document_message(message, name, creds, sender_waid, folder_id):
+    """
+    Process a document message from WhatsApp.
+    
+    Args:
+        message: The document message object
+        name: The sender's name
+        creds: Google API credentials
+        sender_waid: The sender's WhatsApp ID
+        folder_id: Google Drive folder ID for storing documents
+    """
+    try:
+        # Get document information
+        document_id = message["document"]["id"]
+        caption = message["document"].get("caption", "").strip()
+        filename = message["document"].get("filename", "document.pdf")
+        mime_type = message["document"].get("mime_type", "application/pdf")
+        
+        logging.info(f"Processing document with ID: {document_id}, Caption: {caption}, Filename: {filename}, MIME type: {mime_type}")
+        
+        # Get the document URL from WhatsApp
+        document_url = get_document_url_from_whatsapp(document_id)
+        
+        if not document_url:
+            logging.error("Failed to get document URL from WhatsApp")
+            data = get_text_message_input(sender_waid, "I couldn't download your document. Please try again.")
+            send_message(data)
+            return
+        
+        # Download the document with proper error handling
+        try:
+            logging.info(f"Downloading document from URL (first 50 chars): {document_url[:50]}...")
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+                "Authorization": f"Bearer {os.getenv('ACCESS_TOKEN')}"
+            }
+            response = requests.get(document_url, headers=headers, timeout=30, stream=True)
+            
+            if response.status_code != 200:
+                logging.error(f"Failed to download document: Status code {response.status_code}, Response: {response.text[:200]}")
+                data = get_text_message_input(sender_waid, "I couldn't download your document. Please try again.")
+                send_message(data)
+                return
+            
+            # Check if we got actual document data
+            content_type = response.headers.get('Content-Type', '')
+            logging.info(f"Downloaded content type: {content_type}")
+            
+            if 'text/html' in content_type:
+                logging.error(f"Received HTML instead of document data. Response: {response.text[:200]}")
+                data = get_text_message_input(sender_waid, "I couldn't download your document. Please try again.")
+                send_message(data)
+                return
+            
+            # Save the document temporarily
+            temp_dir = "data/temp_receipts"
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # Process differently based on whether a caption was provided or not
+            if caption:
+                # Use the caption directly as part of the filename
+                safe_caption = re.sub(r'[^\w\s-]', '', caption).replace(' ', '_')
+                file_extension = os.path.splitext(filename)[1] or ".pdf"
+                file_path = os.path.join(temp_dir, f"{safe_caption}{file_extension}")
+                
+                with open(file_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                
+                logging.info(f"Document saved temporarily to {file_path}")
+                
+                # Upload to Google Drive
+                file_name = f"{safe_caption}{file_extension}"
+                drive_link = upload_document_to_drive(creds, folder_id, file_path, file_name)
+                
+                if drive_link:
+                    # Send confirmation message
+                    confirmation_message = f"Thank you! Your receipt document for #{safe_caption} has been saved to Google Drive."
+                    data = get_text_message_input(sender_waid, confirmation_message)
+                    send_message(data)
+                    
+                    # Update admins
+                    admin_message = f"{name} sent a receipt document for #{safe_caption}.\nDrive link: {drive_link}"
+                    update_admins(admin_message, sender_waid)
+                else:
+                    data = get_text_message_input(sender_waid, "I couldn't save your receipt document to Google Drive. Please try again.")
+                    send_message(data)
+                
+                # Clean up the temporary file
+                try:
+                    os.remove(file_path)
+                    logging.info(f"Temporary file {file_path} removed")
+                except Exception as e:
+                    logging.error(f"Error removing temporary file: {str(e)}")
+            else:
+                # No caption, process as a new receipt
+                file_extension = os.path.splitext(filename)[1] or ".pdf"
+                file_path = os.path.join(temp_dir, f"receipt_temp_{uuid.uuid4()}{file_extension}")
+                
+                with open(file_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                
+                logging.info(f"Document saved temporarily to {file_path}")
+                
+                # Process the document for receipt extraction
+                try:
+                    # Extract receipt details using OCR/AI
+                    from app.services.receipt_extraction_service import extract_receipt_details, format_extracted_details_for_whatsapp
+                    
+                    with open(file_path, "rb") as f:
+                        document_data = f.read()
+                    
+                    receipt_details, error = extract_receipt_details(document_data, "document")
+                    
+                    # Clean up the temporary file
+                    try:
+                        os.remove(file_path)
+                        logging.info(f"Temporary file {file_path} removed")
+                    except Exception as e:
+                        logging.error(f"Error removing temporary file: {str(e)}")
+                    
+                    if error:
+                        logging.error(f"Error extracting receipt details: {error}")
+                        data = get_text_message_input(sender_waid, "I couldn't extract details from your receipt. Please try sending a clearer document or enter the details manually.")
+                        send_message(data)
+                        return
+                    
+                    # Format the extracted details for WhatsApp
+                    formatted_message = format_extracted_details_for_whatsapp(receipt_details)
+                    
+                    # Get a new receipt number
+                    receipt_number = get_receipt_number(creds, os.getenv("GOOGLE_SHEET_ID"))
+                    
+                    # Store the extracted receipt details for this user
+                    store_extracted_receipt(sender_waid, receipt_details, name)
+                    
+                    # Send the formatted message with the receipt number
+                    confirmation_message = (
+                        f"I've extracted the following details from your receipt:\n\n"
+                        f"{formatted_message}\n\n"
+                        f"Receipt #{receipt_number} has been created.\n\n"
+                        f"✏️ To add or correct information, reply with any of these fields:\n"
+                        f"What:\n"
+                        f"Amount:\n"
+                        f"IVA:\n"
+                        f"Store name:\n"
+                        f"Payment method:\n"
+                        f"Charge to:\n"
+                        f"Comments:\n\n"
+                        f"Include only the fields you want to update.\n"
+                        f"(amount, iva, what, store name, payment method, charge to, comments)\n"
+                        f"✅ To confirm with these partial details, reply \"confirm\" or \"yes\".\n"
+                        f"❌ To cancel, reply \"cancel\" or \"no\".\n\n"
+                    )
+                    data = get_text_message_input(sender_waid, confirmation_message)
+                    send_message(data)
+                    
+                    # Update admins
+                    admin_message = f"{name} sent a receipt document. Details extracted:\n\n{formatted_message}\n\nReceipt {receipt_number} created."
+                    if drive_link:
+                        admin_message += f"\nDrive link: {drive_link}"
+                    update_admins(admin_message, sender_waid)
+                    
+                except Exception as e:
+                    logging.error(f"Error in receipt extraction: {str(e)}")
+                    data = get_text_message_input(sender_waid, "I encountered an error while processing your receipt. Please try again or enter the details manually.")
+                    send_message(data)
+            
+        except Exception as e:
+            logging.error(f"Error downloading document: {str(e)}")
+            data = get_text_message_input(sender_waid, "I couldn't download your document. Please try again.")
+            send_message(data)
+    
+    except Exception as e:
+        logging.error(f"Error processing document message: {str(e)}")
+        data = get_text_message_input(sender_waid, "I couldn't process your document. Please try again.")
+        send_message(data)

@@ -70,7 +70,7 @@ Now we have to find the following information on the **App Dashboard**:
 - **APP_ID**: "<YOUR-WHATSAPP-BUSINESS-APP_ID>" (Found at App Dashboard)
 - **APP_SECRET**: "<YOUR-WHATSAPP-BUSINESS-APP_SECRET>" (Found at App Dashboard)
 - **RECIPIENT_WAID**: "<YOUR-RECIPIENT-TEST-PHONE-NUMBER>" (This is your WhatsApp ID, i.e., phone number. Make sure it is added to the account as shown in the example test message.)
-- **VERSION**: "v18.0" (The latest version of the Meta Graph API)
+- **VERSION**: "v20.0" (The latest version of the Meta Graph API)
 - **ACCESS_TOKEN**: "<YOUR-SYSTEM-USER-ACCESS-TOKEN>" (Created in the previous step)
 
 > You can only send a template type message as your first message to a user. That's why you have to send a reply first before we continue. Took me 2 hours to figure this out.
@@ -326,3 +326,211 @@ curl -i http://localhost:8000/health
 ```bash
 curl -i "http://localhost:8000/webhook?hub.mode=subscribe&hub.verify_token=<your-verify-token>&hub.challenge=test_challenge"
 ```
+
+## Local Development Guide
+
+## Running the Application with Docker
+
+The application is containerized using Docker, which makes it easy to run consistently across different environments. Follow these steps to run the application locally:
+
+### Prerequisites
+
+1. Install [Docker](https://www.docker.com/get-started) and [Docker Compose](https://docs.docker.com/compose/install/) on your machine
+2. Clone the repository to your local machine
+3. Create a `.env` file in the root directory with the required environment variables (see `example.env` for reference)
+
+### Starting the Docker Container
+
+1. Build and start the Docker container:
+
+```bash
+# Build and start the container in detached mode
+docker-compose up --build -d
+```
+
+2. Check if the container is running:
+
+```bash
+docker-compose ps
+```
+
+3. View the logs:
+
+```bash
+# View all logs
+docker-compose logs
+
+# View the last 50 lines
+docker-compose logs --tail=50
+
+# Follow the logs in real-time
+docker-compose logs --follow
+```
+
+4. Stop the container:
+
+```bash
+docker-compose down
+```
+
+### Rebuilding After Code Changes
+
+When you make changes to the code, you need to rebuild the Docker container:
+
+```bash
+docker-compose down && docker-compose up --build -d
+```
+
+## Exposing Your Local Server with Localtunnel
+
+To test webhooks, you need to expose your local server to the internet. [Localtunnel](https://github.com/localtunnel/localtunnel) is a simple and lightweight tool for this purpose.
+
+### Installing Localtunnel
+
+```bash
+# Install localtunnel globally using npm
+npm install -g localtunnel
+```
+
+### Using Localtunnel
+
+1. Start your Docker container as described above
+2. In a separate terminal, run localtunnel to expose your local server:
+
+```bash
+# Basic usage (random subdomain)
+lt --port 8080
+
+# With a specific subdomain (if available)
+lt --port 8080 --subdomain your-preferred-subdomain
+```
+
+3. Localtunnel will provide a URL (e.g., `https://wicked-swans-rule.loca.lt`) that you can use to access your local server from the internet
+
+4. To check if the tunnel is working, visit the health endpoint:
+
+```bash
+curl https://your-tunnel-url.loca.lt/health
+```
+
+5. To stop localtunnel, press `Ctrl+C` in the terminal where it's running
+
+### Important Notes About Localtunnel
+
+- The URL changes each time you restart localtunnel unless you specify a subdomain
+- If you're configuring webhooks in external services (like Meta Developer Portal), you'll need to update the URL whenever it changes
+- For the WhatsApp webhook, use the URL with `/webhook` appended (e.g., `https://wicked-swans-rule.loca.lt/webhook`)
+- Localtunnel sessions may expire after some time of inactivity
+
+### Checking the Localtunnel URL
+
+If you need to check the current localtunnel URL:
+
+```bash
+# Start localtunnel with the print-url option
+lt --port 8080 --print-url
+
+# Or check running processes
+ps aux | grep lt
+```
+
+## Configuring WhatsApp Webhook for Local Development
+
+1. Start your Docker container and localtunnel as described above
+2. In the Meta Developer Portal, configure your webhook with:
+   - **Callback URL**: Your localtunnel URL + `/webhook` (e.g., `https://wicked-swans-rule.loca.lt/webhook`)
+   - **Verify Token**: The value you set in your `.env` file for `VERIFY_TOKEN` (e.g., `1234`)
+   - **Subscribe to**: The `messages` field
+3. Test the webhook verification by visiting:
+   ```
+   https://your-tunnel-url.loca.lt/webhook?hub.mode=subscribe&hub.verify_token=YOUR_VERIFY_TOKEN&hub.challenge=CHALLENGE_ACCEPTED
+   ```
+4. If configured correctly, you should see `CHALLENGE_ACCEPTED` as the response
+
+## Troubleshooting
+
+### Docker Issues
+
+- **Container won't start**: Check the logs with `docker-compose logs` for error messages
+- **Port conflicts**: Make sure port 8080 is not being used by another application
+- **Environment variables**: Ensure all required environment variables are set in your `.env` file
+
+### Localtunnel Issues
+
+- **Connection refused**: Make sure your Docker container is running and listening on port 8080
+- **Tunnel unavailable**: Restart localtunnel, as the session may have expired
+- **503 error**: The tunnel may be overloaded or experiencing issues; try restarting localtunnel
+
+### Webhook Issues
+
+- **Verification fails**: Double-check that the verify token in your `.env` file matches the one in the Meta Developer Portal
+- **Not receiving messages**: Check the Docker logs to see if the webhook is receiving requests
+- **403 errors**: The signature verification may be failing; temporarily comment out the `@signature_required` decorator in `app/views.py` for testing
+
+## Development Best Practices
+
+- Always test webhook functionality with localtunnel before deploying
+- Use the enhanced logging in the webhook handler to debug issues
+- Check the Docker logs frequently to monitor the application's behavior
+- After making changes to the code, rebuild the Docker container and restart localtunnel
+
+## Webhook Configuration for Local Development
+
+When developing locally, you need to ensure that WhatsApp messages can reach your local development server. There are two main approaches:
+
+### Option 1: Update the webhook URL in Meta Developer Dashboard
+
+1. Start your local development server:
+   ```
+   docker-compose up --build -d
+   ```
+
+2. Create a tunnel to expose your local server:
+   ```
+   lt --port 8080 --print-url
+   ```
+
+3. Update the webhook URL in the Meta Developer Dashboard:
+   - Go to [Meta Developer Dashboard](https://developers.facebook.com/)
+   - Navigate to your WhatsApp app > Configuration
+   - Update the Callback URL to your localtunnel URL + `/webhook` (e.g., `https://great-mangos-doubt.loca.lt/webhook`)
+   - Verify Token: Use the value from your `.env` file (default: `1234`)
+   - Click "Verify and Save"
+
+4. Verify your webhook is working:
+   ```
+   python verify_webhook.py
+   ```
+
+### Option 2: Use a proxy on your production server
+
+If you prefer to keep the webhook URL in Meta Developer Dashboard unchanged (`https://idrea.diligent-devs.com/webhook`), you can deploy a proxy on your production server:
+
+1. Copy `webhook_proxy.py` to your production server
+2. Set the environment variable `TARGET_WEBHOOK_URL` to your localtunnel URL:
+   ```
+   export TARGET_WEBHOOK_URL="https://your-localtunnel-url.loca.lt/webhook"
+   ```
+3. Run the proxy:
+   ```
+   python webhook_proxy.py
+   ```
+
+This will forward all webhook requests from your production server to your local development server.
+
+### Troubleshooting Webhook Issues
+
+If you're not receiving messages from WhatsApp:
+
+1. Check that your webhook URL is correctly configured in the Meta Developer Dashboard
+2. Verify that your localtunnel is running and accessible
+3. Check the logs for any errors:
+   ```
+   docker-compose logs --follow
+   ```
+4. Test your webhook with the verification script:
+   ```
+   python verify_webhook.py
+   ```
+
+Remember that each time you restart localtunnel, you'll get a new URL, and you'll need to update the webhook URL in the Meta Developer Dashboard or the `TARGET_WEBHOOK_URL` environment variable accordingly.

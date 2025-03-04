@@ -96,3 +96,6 @@ target/
 
 # Docker stuff
 *.tar
+
+local dev examples/
+*.amazonaws.com
