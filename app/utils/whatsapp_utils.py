@@ -369,7 +369,8 @@ def process_text_message(text, name, creds, sender_waid):
             receipt_num = append_to_sheet(creds, sheet_id, update_data)
             
             # Send confirmation
-            confirm_message = f"Thank you! I've saved your receipt details. Your receipt number is {receipt_num}."
+            first_name = get_first_name(name)
+            confirm_message = f"Thank you {first_name}! I've saved your receipt details. Your receipt number is {receipt_num}."
             data = get_text_message_input(sender_waid, confirm_message)
             send_message(data)
             
@@ -380,7 +381,8 @@ def process_text_message(text, name, creds, sender_waid):
             return
         else:
             # No stored receipt details for this user
-            data = get_text_message_input(sender_waid, "I don't have any pending receipt details to confirm. You can send a new receipt image or enter details manually.")
+            first_name = get_first_name(name)
+            data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I don't have any pending receipt details to confirm. You can send a new receipt image or enter details manually.")
             send_message(data)
             return
     
@@ -390,22 +392,41 @@ def process_text_message(text, name, creds, sender_waid):
             # User wants to cancel the receipt
             logging.info("User cancelling receipt")
             
+            # Check if there's a drive link to delete
+            drive_link = stored_receipt.get("drive_link", "")
+            if drive_link:
+                # Extract file ID from drive link
+                # Drive links are in the format: https://drive.google.com/file/d/FILE_ID/view
+                try:
+                    file_id = drive_link.split("/d/")[1].split("/")[0]
+                    delete_result = delete_file_from_drive(creds, file_id)
+                    if delete_result:
+                        logging.info(f"Deleted receipt file {file_id} from Drive during cancellation")
+                    else:
+                        logging.warning(f"Failed to delete receipt file {file_id} from Drive during cancellation")
+                except Exception as e:
+                    logging.error(f"Error extracting file ID from drive link: {str(e)}")
+            
             # Remove the stored receipt
             delete_stored_receipt(sender_waid)
             
             # Send confirmation of cancellation
-            cancel_message = "I've cancelled this receipt. No information was saved."
+            first_name = get_first_name(name)
+            cancel_message = f"Okay {first_name}, I've cancelled this receipt. All information and uploaded files have been deleted."
             data = get_text_message_input(sender_waid, cancel_message)
             send_message(data)
             
             # Update admins
             admin_message = f"{name} cancelled their receipt submission."
+            if drive_link:
+                admin_message += " The uploaded file was deleted from Drive."
             update_admins(admin_message, sender_waid)
             
             return
         else:
             # No stored receipt details for this user
-            data = get_text_message_input(sender_waid, "I don't have any pending receipt details to cancel. You can send a new receipt image or enter details manually.")
+            first_name = get_first_name(name)
+            data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I don't have any pending receipt details to cancel. You can send a new receipt image or enter details manually.")
             send_message(data)
             return
     
@@ -602,7 +623,8 @@ def process_text_message(text, name, creds, sender_waid):
     else:
         # If it's not a form submission, send the form template
         logging.info(f"Sending form template to {sender_waid}")
-        template_message = ("Please provide the receipt details in the following format:\n\n"
+        first_name = get_first_name(name)
+        template_message = (f"Hi {first_name}! Please provide the receipt details in the following format:\n\n"
                 "*What*: \n"
                 "*Amount* (euros): \n"
                 "IVA (euros): \n"
@@ -719,17 +741,13 @@ def is_valid_whatsapp_message(message):
     Returns:
         bool: True if the message has a valid structure, False otherwise
     """
-    # Check if the message has the required fields
-    return (
-        isinstance(message, dict) and
-        message.get("from") and
-        (
-            (message.get("type") == "text" and message.get("text")) or
-            (message.get("type") == "image" and message.get("image")) or
-            (message.get("type") == "document" and message.get("document")) or
-            (message.get("type") == "audio" and message.get("audio")) or
-            (message.get("type") == "video" and message.get("video"))
-        )
+    # Check if this is a valid WhatsApp message (has text, image, or document component)
+    return bool(
+        (message.get("type") == "text" and message.get("text")) or
+        (message.get("type") == "image" and message.get("image")) or
+        (message.get("type") == "document" and message.get("document")) or
+        (message.get("type") == "audio" and message.get("audio")) or
+        (message.get("type") == "video" and message.get("video"))
     )
 
 
@@ -1047,7 +1065,8 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
                 
                 if drive_link:
                     # Send confirmation message
-                    confirmation_message = f"Thank you! Your receipt image for #{safe_caption} has been saved to Google Drive."
+                    first_name = get_first_name(name)
+                    confirmation_message = f"Thank you {first_name}! Your receipt image for #{safe_caption} has been saved to Google Drive."
                     data = get_text_message_input(sender_waid, confirmation_message)
                     send_message(data)
                     
@@ -1055,7 +1074,8 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
                     admin_message = f"{name} sent a receipt image for #{safe_caption}.\nDrive link: {drive_link}"
                     update_admins(admin_message, sender_waid)
                 else:
-                    data = get_text_message_input(sender_waid, "I couldn't save your receipt image to Google Drive. Please try again.")
+                    first_name = get_first_name(name)
+                    data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I couldn't save your receipt image to Google Drive. Please try again.")
                     send_message(data)
                 
                 # Clean up the temporary file
@@ -1102,7 +1122,8 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
                     
                     if error:
                         logging.error(f"Error extracting receipt details: {error}")
-                        data = get_text_message_input(sender_waid, "I couldn't extract details from your receipt. Please try sending a clearer image or enter the details manually.")
+                        first_name = get_first_name(name)
+                        data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I couldn't extract details from your receipt. Please try sending a clearer image or enter the details manually.")
                         send_message(data)
                         return
                     
@@ -1124,8 +1145,9 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
                     store_extracted_receipt(sender_waid, receipt_details, name)
                     
                     # Send the formatted message with the receipt number
+                    first_name = get_first_name(name)
                     confirmation_message = (
-                        f"I've extracted the following details from your receipt:\n\n"
+                        f"Hi {first_name}! I've extracted the following details from your receipt:\n\n"
                         f"{formatted_message}\n\n"
                         f"Receipt #{receipt_number} has been created.\n\n"
                         f"✏️ To add or correct information, reply with any of these fields:\n"
@@ -1136,10 +1158,8 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
                         f"Payment method:\n"
                         f"Charge to:\n"
                         f"Comments:\n\n"
-                        f"Include only the fields you want to update.\n"
-                        f"(amount, iva, what, store name, payment method, charge to, comments)\n"
-                        f"✅ To confirm with these partial details, reply \"confirm\" or \"yes\".\n"
-                        f"❌ To cancel, reply \"cancel\" or \"no\".\n\n"
+                        f"✅ To confirm without adding information, reply \"confirm\" or \"yes\".\n"
+                        f"❌ To cancel this receipt, reply \"cancel\" or \"no\"."
                     )
                     data = get_text_message_input(sender_waid, confirmation_message)
                     send_message(data)
@@ -1244,7 +1264,8 @@ def process_document_message(message, name, creds, sender_waid, folder_id):
                 
                 if drive_link:
                     # Send confirmation message
-                    confirmation_message = f"Thank you! Your receipt document for #{safe_caption} has been saved to Google Drive."
+                    first_name = get_first_name(name)
+                    confirmation_message = f"Thank you {first_name}! Your receipt document for #{safe_caption} has been saved to Google Drive."
                     data = get_text_message_input(sender_waid, confirmation_message)
                     send_message(data)
                     
@@ -1252,7 +1273,8 @@ def process_document_message(message, name, creds, sender_waid, folder_id):
                     admin_message = f"{name} sent a receipt document for #{safe_caption}.\nDrive link: {drive_link}"
                     update_admins(admin_message, sender_waid)
                 else:
-                    data = get_text_message_input(sender_waid, "I couldn't save your receipt document to Google Drive. Please try again.")
+                    first_name = get_first_name(name)
+                    data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I couldn't save your receipt document to Google Drive. Please try again.")
                     send_message(data)
                 
                 # Clean up the temporary file
@@ -1275,13 +1297,19 @@ def process_document_message(message, name, creds, sender_waid, folder_id):
                 
                 # Process the document for receipt extraction
                 try:
+                    # First, upload the document to Google Drive
+                    receipt_number = get_receipt_number(creds, os.getenv("GOOGLE_SHEET_ID"))
+                    drive_filename = f"{receipt_number}{file_extension}"
+                    
+                    # Upload to Google Drive
+                    drive_link = upload_document_to_drive(creds, folder_id, file_path, drive_filename)
+                    logging.info(f"Document uploaded to Google Drive: {drive_link}")
+                    
                     # Extract receipt details using OCR/AI
                     from app.services.receipt_extraction_service import extract_receipt_details, format_extracted_details_for_whatsapp
                     
                     with open(file_path, "rb") as f:
                         document_data = f.read()
-                    
-                    receipt_details, error = extract_receipt_details(document_data, "document")
                     
                     # Clean up the temporary file
                     try:
@@ -1290,24 +1318,27 @@ def process_document_message(message, name, creds, sender_waid, folder_id):
                     except Exception as e:
                         logging.error(f"Error removing temporary file: {str(e)}")
                     
+                    receipt_details, error = extract_receipt_details(document_data, "pdf")
+                    
                     if error:
                         logging.error(f"Error extracting receipt details: {error}")
-                        data = get_text_message_input(sender_waid, "I couldn't extract details from your receipt. Please try sending a clearer document or enter the details manually.")
+                        first_name = get_first_name(name)
+                        data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I couldn't extract details from your receipt. Please try sending a clearer document or enter the details manually.")
                         send_message(data)
                         return
                     
                     # Format the extracted details for WhatsApp
                     formatted_message = format_extracted_details_for_whatsapp(receipt_details)
                     
-                    # Get a new receipt number
-                    receipt_number = get_receipt_number(creds, os.getenv("GOOGLE_SHEET_ID"))
-                    
-                    # Store the extracted receipt details for this user
+                    # Store the extracted receipt details for this user and add the drive link
+                    if drive_link:
+                        receipt_details["drive_link"] = drive_link
                     store_extracted_receipt(sender_waid, receipt_details, name)
                     
                     # Send the formatted message with the receipt number
+                    first_name = get_first_name(name)
                     confirmation_message = (
-                        f"I've extracted the following details from your receipt:\n\n"
+                        f"Hi {first_name}! I've extracted the following details from your receipt:\n\n"
                         f"{formatted_message}\n\n"
                         f"Receipt #{receipt_number} has been created.\n\n"
                         f"✏️ To add or correct information, reply with any of these fields:\n"
@@ -1318,10 +1349,8 @@ def process_document_message(message, name, creds, sender_waid, folder_id):
                         f"Payment method:\n"
                         f"Charge to:\n"
                         f"Comments:\n\n"
-                        f"Include only the fields you want to update.\n"
-                        f"(amount, iva, what, store name, payment method, charge to, comments)\n"
-                        f"✅ To confirm with these partial details, reply \"confirm\" or \"yes\".\n"
-                        f"❌ To cancel, reply \"cancel\" or \"no\".\n\n"
+                        f"✅ To confirm without adding information, reply \"confirm\" or \"yes\".\n"
+                        f"❌ To cancel this receipt, reply \"cancel\" or \"no\"."
                     )
                     data = get_text_message_input(sender_waid, confirmation_message)
                     send_message(data)
@@ -1336,6 +1365,14 @@ def process_document_message(message, name, creds, sender_waid, folder_id):
                     logging.error(f"Error in receipt extraction: {str(e)}")
                     data = get_text_message_input(sender_waid, "I encountered an error while processing your receipt. Please try again or enter the details manually.")
                     send_message(data)
+                    
+                    # Make sure to clean up the temporary file if it still exists
+                    try:
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                            logging.info(f"Temporary file {file_path} removed after error")
+                    except Exception as ex:
+                        logging.error(f"Error removing temporary file after extraction error: {str(ex)}")
             
         except Exception as e:
             logging.error(f"Error downloading document: {str(e)}")
@@ -1355,7 +1392,8 @@ def handle_receipt_confirmation(sender_waid, text, creds, name):
     
     # Check if we have stored receipt data for this user
     if not stored_receipt:
-        data = get_text_message_input(sender_waid, "I don't have any pending receipt details to confirm. You can send a new receipt image or enter details manually.")
+        first_name = get_first_name(name)
+        data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I don't have any pending receipt details to confirm. You can send a new receipt image or enter details manually.")
         send_message(data)
         return True
     
@@ -1373,7 +1411,8 @@ def handle_receipt_confirmation(sender_waid, text, creds, name):
     receipt_num = append_to_sheet(creds, sheet_id, update_data)
     
     # Send confirmation
-    confirm_message = f"Thank you! I've saved your receipt details. Your receipt number is {receipt_num}."
+    first_name = get_first_name(name)
+    confirm_message = f"Thank you {first_name}! I've saved your receipt details. Your receipt number is {receipt_num}."
     data = get_text_message_input(sender_waid, confirm_message)
     send_message(data)
     
@@ -1384,3 +1423,41 @@ def handle_receipt_confirmation(sender_waid, text, creds, name):
     update_admins(admin_message, sender_waid)
     
     return True
+
+
+def delete_file_from_drive(credentials, file_id):
+    """
+    Delete a file from Google Drive.
+    
+    Args:
+        credentials: Google API credentials
+        file_id: ID of the file to delete
+        
+    Returns:
+        Boolean indicating success
+    """
+    try:
+        service = build('drive', 'v3', credentials=credentials)
+        service.files().delete(fileId=file_id).execute()
+        logging.info(f"Deleted file {file_id} from Google Drive")
+        return True
+    except Exception as e:
+        logging.error(f"Error deleting file from Google Drive: {str(e)}")
+        return False
+
+
+def get_first_name(full_name):
+    """
+    Extract the first name from a full name.
+    
+    Args:
+        full_name: The full name of the user
+        
+    Returns:
+        str: The first name
+    """
+    if not full_name:
+        return ""
+    
+    # Split the name and return the first part
+    return full_name.split()[0]

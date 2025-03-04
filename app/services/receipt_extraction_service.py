@@ -57,7 +57,7 @@ def get_openai_client():
             raise RuntimeError(f"Could not initialize OpenAI client: {str(e)}, then: {str(e2)}")
 
 # OpenAI API configuration
-OPENAI_MODEL = "gpt-4o"  # Using gpt-4o for better image analysis
+OPENAI_MODEL = "gpt-4o-mini"  # Using gpt-4o for better image analysis
 OPENAI_MAX_TOKENS = 4096  # Set token limit based on complexity of receipts
 OPENAI_TEMPERATURE = 0.0  # Use 0 temperature for deterministic outputs
 EXTRACTION_DELAY = 0.5  # Add delay between extraction attempts if needed
@@ -314,6 +314,9 @@ def prepare_for_google_sheets(details):
     # Log received details for debugging
     logging.info(f"Preparing these details for Google Sheets: {details}")
     
+    # Extract the sender's name from the details
+    sender_name = details.get("sender_name", "")
+    
     # The order of fields in Google Sheets
     fields_order = ["what", "amount", "iva", "receipt", "store_name", "payment_method", "charge_to", "comments"]
     
@@ -374,7 +377,8 @@ def prepare_for_google_sheets(details):
     # Log the values being returned for debugging
     logging.info(f"Prepared values for Google Sheets: {values}")
     
-    return values
+    # Return with sender_name as the first element
+    return [sender_name] + values
 
 def extract_from_image(base64_image):
     """
