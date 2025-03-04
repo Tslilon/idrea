@@ -301,6 +301,9 @@ def prepare_for_google_sheets(details):
     Returns:
         List of values in the order expected by Google Sheets
     """
+    # Log received details for debugging
+    logging.info(f"Preparing these details for Google Sheets: {details}")
+    
     # The order of fields in Google Sheets
     fields_order = ["what", "amount", "iva", "receipt", "store_name", "payment_method", "charge_to", "comments"]
     
@@ -314,13 +317,30 @@ def prepare_for_google_sheets(details):
             values[0] = details["what"]
         
         # Map amount field (index 1)
+        # First check for total_amount (from OpenAI extraction) and then amount (from manual entry)
+        amount_value = None
         if "total_amount" in details and details["total_amount"]:
-            # Save the total_amount directly to the amount field
-            values[1] = details["total_amount"].replace('€', '').strip()
+            amount_value = details["total_amount"]
+            logging.info(f"Found total_amount field: {amount_value}")
+        elif "amount" in details and details["amount"]:
+            amount_value = details["amount"]
+            logging.info(f"Found amount field: {amount_value}")
+            
+        if amount_value is not None:
+            # Simply pass the amount value as is - no complex formatting
+            # Remove any currency symbols but keep the decimal as is
+            amount_str = str(amount_value).replace('€', '').strip()
+            logging.info(f"Prepared amount for Google Sheets (simple): {amount_str}")
+            values[1] = amount_str
+        else:
+            logging.warning("No amount or total_amount field found in receipt details")
         
         # Map IVA field (index 2)
         if "iva" in details and details["iva"]:
-            values[2] = details["iva"].replace('€', '').strip()
+            # Simply pass the IVA value as is - no complex formatting
+            iva_str = str(details["iva"]).replace('€', '').strip()
+            logging.info(f"Prepared IVA for Google Sheets (simple): {iva_str}")
+            values[2] = iva_str
         
         # Always set receipt to yes (index 3)
         values[3] = "yes"

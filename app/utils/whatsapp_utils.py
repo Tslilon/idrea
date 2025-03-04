@@ -16,7 +16,6 @@ from googleapiclient.errors import HttpError
 
 # Import our new receipt extraction service
 from app.services.receipt_extraction_service import (
-    extract_receipt_details,
     format_extracted_details_for_whatsapp,
     prepare_for_google_sheets
 )
@@ -597,7 +596,9 @@ def process_text_message(text, name, creds, sender_waid):
                 "Store name: \n"
                 "Payment method: \n"
                 "Charge to: \n"
-                "Comments: \n")
+                "Comments: \n\n"
+                "or send the receipt image/pdf.\n"
+                "Do not include a caption for automatic extraction.")
         logging.info(f"Template message: {template_message[:50]}...")
         data = get_text_message_input(sender_waid, template_message)
         response = send_message(data)
@@ -789,71 +790,39 @@ def append_to_sheet(credentials, sheet_id, values_list):
     service = build('sheets', 'v4', credentials=credentials)
 
     # Specify the sheet and the range where data will be appended.
-    # For example, 'Sheet1' is the sheet name, and 'A:A' specifies the first column.
     range = 'iDrea!A:K'  # Update this with your actual sheet name and range
 
-    # Convert timestamp to readable format (if necessary)
+    # Convert timestamp to readable format
     time = datetime.now().strftime('%Y-%m-%d %H:%M')
 
     # Get the next receipt number
     next_receipt_number = get_receipt_number(credentials, sheet_id)
     
-    # Process numeric values to ensure they're correctly formatted for European style
-    # (comma as decimal separator, period as thousand separator)
+    # Process values but with minimal formatting - preserve exact decimal values
     processed_values = []
     for value in values_list:
-        if isinstance(value, str):
-            # Check if this looks like a numeric value
+        if isinstance(value, str) and value:
+            # Check if this looks like a numeric value (amount or IVA)
             # First, standardize to US format (period as decimal) for processing
             cleaned_value = value.strip()
             
-            # If there are both commas and periods, we need to determine which is the decimal separator
-            if ',' in cleaned_value and '.' in cleaned_value:
-                # In input with both separators, typically the last one is the decimal separator
-                if cleaned_value.rfind(',') > cleaned_value.rfind('.'):
-                    # Last separator is comma, which suggests European format originally
-                    # First remove all periods (thousand separators)
-                    no_thousand_sep = cleaned_value.replace('.', '')
-                    # Then replace comma with period for standard processing
-                    cleaned_value = no_thousand_sep.replace(',', '.')
-                else:
-                    # Last separator is period, which suggests US format originally
-                    # First remove all commas (thousand separators)
-                    cleaned_value = cleaned_value.replace(',', '')
-            else:
-                # Only one type of separator
-                # Convert comma to period for standard processing
+            # Convert comma to period for standard processing
+            if ',' in cleaned_value:
                 cleaned_value = cleaned_value.replace(',', '.')
             
             # Now check if it's a valid number
             if cleaned_value and (cleaned_value.replace('.', '', 1).isdigit() or 
                                 (cleaned_value.startswith('-') and cleaned_value[1:].replace('.', '', 1).isdigit())):
-                # If there are multiple periods, keep only the last one (assumed to be decimal separator)
-                if cleaned_value.count('.') > 1:
-                    parts = cleaned_value.split('.')
-                    cleaned_value = ''.join(parts[:-1]) + '.' + parts[-1]
-                
-                # Convert to European format
                 try:
                     # Parse as float for standardization
                     num_value = float(cleaned_value)
                     
-                    # Format with European style - comma as decimal separator
-                    # For integers, don't show decimal part
-                    if num_value.is_integer():
-                        euro_format = f"{int(num_value):,}".replace(',', '.')
-                    else:
-                        # Convert to a string that preserves the original decimal places
-                        # Get the number of decimal places in the original value
-                        decimal_part = str(num_value).split('.')[1] if '.' in str(num_value) else ''
-                        decimal_places = len(decimal_part)
-                        
-                        # Format with original decimal places (no rounding)
-                        format_str = f"{{:,.{decimal_places}f}}".replace(',', 'X').replace('.', ',').replace('X', '.')
-                        euro_format = format_str.format(num_value)
+                    # Just save the exact value as a string with European formatting (comma as decimal)
+                    # This is the simplest approach to preserve exact values
+                    euro_format = str(num_value).replace('.', ',')
                     
                     processed_values.append(euro_format)
-                    logging.info(f"Formatted number (preserving decimals): {value} -> {euro_format}")
+                    logging.info(f"Formatted number (simple): {value} -> {euro_format}")
                 except ValueError:
                     # If conversion fails, keep the original
                     processed_values.append(value)
@@ -878,6 +847,7 @@ def append_to_sheet(credentials, sheet_id, values_list):
         body=body).execute()
 
     logging.info(f"{result.get('updates').get('updatedCells')} cells appended.")
+    
     return next_receipt_number
 
 
@@ -929,14 +899,39 @@ def store_extracted_receipt(wa_id, receipt_details, sender_name="User"):
         receipt_details: The receipt details dictionary
         sender_name: The name of the sender (defaults to "User")
     """
+    # Log receipt details before modification
+    logging.info(f"Storing receipt details (before modification): {receipt_details}")
+    
+    # Make a copy of the receipt details to avoid modifying the original
+    modified_details = receipt_details.copy()
+    
     # Add the sender's name to the receipt details
-    receipt_details["sender_name"] = sender_name
+    modified_details["sender_name"] = sender_name
     
     # Ensure receipt=yes is set
-    receipt_details["receipt"] = "yes"
+    modified_details["receipt"] = "yes"
+    
+    # Ensure consistent field naming
+    # Check for total_amount and map it to amount if amount doesn't exist
+    if "total_amount" in modified_details and "amount" not in modified_details:
+        modified_details["amount"] = modified_details["total_amount"]
+        logging.info(f"Mapped total_amount to amount: {modified_details['amount']}")
+    
+    # Ensure amount and IVA values just have currency symbols removed, no other formatting
+    for field in ["amount", "total_amount", "iva"]:
+        if field in modified_details and modified_details[field]:
+            # Ensure the value is a string
+            value = str(modified_details[field])
+            
+            # Remove any currency symbols but keep everything else as is
+            modified_details[field] = value.replace('€', '').strip()
+            logging.info(f"Cleaned {field} value: {value} -> {modified_details[field]}")
+    
+    # Log final receipt details after modification
+    logging.info(f"Storing receipt details (after modification): {modified_details}")
     
     with shelve.open("receipts_db", writeback=True) as receipts_shelf:
-        receipts_shelf[wa_id] = receipt_details
+        receipts_shelf[wa_id] = modified_details
 
 def get_stored_receipt(wa_id):
     """Retrieve stored receipt details for a user."""
@@ -1068,33 +1063,37 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
                 
                 # Process the image for receipt extraction
                 try:
-                    # Extract receipt details using OCR/AI
+                    # First, upload the image to Google Drive
+                    receipt_number = get_receipt_number(creds, os.getenv("GOOGLE_SHEET_ID"))
+                    filename = f"{receipt_number}{extension}"
+                    
+                    # Upload to Google Drive
+                    drive_link = upload_image_to_drive(creds, folder_id, file_path, filename)
+                    logging.info(f"Image uploaded to Google Drive: {drive_link}")
+                    
+                    # Now extract receipt details using OCR/AI
                     from app.services.receipt_extraction_service import extract_receipt_details, format_extracted_details_for_whatsapp
                     
                     with open(file_path, "rb") as f:
                         image_data = f.read()
                     
-                    receipt_details, error = extract_receipt_details(image_data, "image")
-                    
-                    # Before removing the temp file, upload it to Google Drive
-                    receipt_number = get_receipt_number(creds, os.getenv("GOOGLE_SHEET_ID"))
-                    filename = f"Receipt_{receipt_number}_{datetime.now().strftime('%Y-%m-%d')}{extension}"
-                    
-                    # Upload to Google Drive
-                    drive_link = upload_image_to_drive(creds, folder_id, file_path, filename)
-                    
-                    # Clean up the temporary file
+                    # Clean up the temporary file after reading it
                     try:
                         os.remove(file_path)
                         logging.info(f"Temporary file {file_path} removed")
                     except Exception as e:
                         logging.error(f"Error removing temporary file: {str(e)}")
                     
+                    receipt_details, error = extract_receipt_details(image_data, "image")
+                    
                     if error:
                         logging.error(f"Error extracting receipt details: {error}")
                         data = get_text_message_input(sender_waid, "I couldn't extract details from your receipt. Please try sending a clearer image or enter the details manually.")
                         send_message(data)
                         return
+                    
+                    # Log extracted details before modification
+                    logging.info(f"Extracted receipt details: {receipt_details}")
                     
                     # Add the Google Drive link to the receipt details
                     if drive_link:
@@ -1333,3 +1332,41 @@ def process_document_message(message, name, creds, sender_waid, folder_id):
         logging.error(f"Error processing document message: {str(e)}")
         data = get_text_message_input(sender_waid, "I couldn't process your document. Please try again.")
         send_message(data)
+
+
+def handle_receipt_confirmation(sender_waid, text, creds, name):
+    """Handle receipt confirmation from user"""
+    stored_receipt = get_stored_receipt(sender_waid)
+    sheet_id = os.getenv("GOOGLE_SHEET_ID")
+    
+    # Check if we have stored receipt data for this user
+    if not stored_receipt:
+        data = get_text_message_input(sender_waid, "I don't have any pending receipt details to confirm. You can send a new receipt image or enter details manually.")
+        send_message(data)
+        return True
+    
+    # User is confirming extracted receipt details
+    logging.info(f"User confirming receipt details: {stored_receipt}")
+    
+    # Use prepare_for_google_sheets to get the values in the correct order
+    update_data = prepare_for_google_sheets(stored_receipt)
+    logging.info(f"Prepared data for Google Sheets: {update_data}")
+    
+    # Remove the stored receipt
+    delete_stored_receipt(sender_waid)
+    
+    # Write to Google Sheets
+    receipt_num = append_to_sheet(creds, sheet_id, update_data)
+    
+    # Send confirmation
+    confirm_message = f"Thank you! I've saved your receipt details. Your receipt number is {receipt_num}."
+    data = get_text_message_input(sender_waid, confirm_message)
+    send_message(data)
+    
+    # Update admins
+    admin_message = f"{name} confirmed receipt details. Receipt {receipt_num} added to spreadsheet."
+    if "drive_link" in stored_receipt:
+        admin_message += f"\nDrive link: {stored_receipt['drive_link']}"
+    update_admins(admin_message, sender_waid)
+    
+    return True
