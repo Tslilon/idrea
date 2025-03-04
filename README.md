@@ -1,231 +1,123 @@
-# Build AI WhatsApp Bots with Pure Python
+# iDrea - WhatsApp Receipt Processing System
 
-This guide will walk you through the process of creating a WhatsApp bot using the Meta (formerly Facebook) Cloud API with pure Python, and Flask particular. We'll also integrate webhook events to receive messages in real-time and use OpenAI to generate AI responses. For more information on the structure of the Flask application, you can refer to [this documentation](https://github.com/daveebbelaar/python-whatsapp-bot/tree/main/app).
+iDrea is a WhatsApp-based automated system for processing, categorizing, and storing receipt information. The bot allows users to send images or PDFs of receipts, automatically extracts the relevant details using AI, and stores the information in a structured format.
 
-## Prerequisites
+# App Functionality
 
-1. A Meta developer account — If you don't have one, you can [create a Meta developer account here](https://developers.facebook.com/).
-2. A business app — If you don't have one, you can [learn to create a business app here](https://developers.facebook.com/docs/development/create-an-app/). If you don't see an option to create a business app, select **Other** > **Next** > **Business**.
-3. Familiarity with Python to follow the tutorial.
+## Receipt Processing System
 
+The iDrea WhatsApp bot is designed to help users efficiently manage and process receipt details through a conversational interface.
 
-## Table of Contents
+### Core Features
 
-- [Build AI WhatsApp Bots with Pure Python](#build-ai-whatsapp-bots-with-pure-python)
-  - [Prerequisites](#prerequisites)
-  - [Table of Contents](#table-of-contents)
-  - [Get Started](#get-started)
-  - [Step 1: Select Phone Numbers](#step-1-select-phone-numbers)
-  - [Step 2: Send Messages with the API](#step-2-send-messages-with-the-api)
-  - [Step 3: Configure Webhooks to Receive Messages](#step-3-configure-webhooks-to-receive-messages)
-      - [Start your app](#start-your-app)
-      - [Launch ngrok](#launch-ngrok)
-      - [Integrate WhatsApp](#integrate-whatsapp)
-      - [Testing the Integration](#testing-the-integration)
-  - [Step 4: Understanding Webhook Security](#step-4-understanding-webhook-security)
-      - [Verification Requests](#verification-requests)
-      - [Validating Verification Requests](#validating-verification-requests)
-      - [Validating Payloads](#validating-payloads)
-  - [Step 5: Learn about the API and Build Your App](#step-5-learn-about-the-api-and-build-your-app)
-  - [Step 6: Integrate AI into the Application](#step-6-integrate-ai-into-the-application)
-  - [Step 7: Add a Phone Number](#step-7-add-a-phone-number)
-  - [Datalumina](#datalumina)
-  - [Tutorials](#tutorials)
+1. **Multi-format Receipt Capture**
+   - **Image Processing**: Extract details from receipt photos using OCR and AI
+   - **PDF Processing**: Convert PDF documents to images and extract receipt information
+   - **Manual Entry**: Enter receipt details directly through a structured conversation
 
-## Get Started
+2. **Intelligent Data Extraction**
+   - Automatically extracts key receipt information:
+     - Item description (What)
+     - Amount
+     - VAT/IVA
+     - Store name
+     - Payment method
+     - Charge to department
+     - Additional comments
 
-1. **Overview & Setup**: Begin your journey [here](https://developers.facebook.com/docs/whatsapp/cloud-api/get-started).
-2. **Locate Your Bots**: Your bots can be found [here](https://developers.facebook.com/apps/).
-3. **WhatsApp API Documentation**: Familiarize yourself with the [official documentation](https://developers.facebook.com/docs/whatsapp).
-4. **Helpful Guide**: Here's a [Python-based guide](https://developers.facebook.com/blog/post/2022/10/24/sending-messages-with-whatsapp-in-your-python-applications/) for sending messages.
-5. **API Docs for Sending Messages**: Check out [this documentation](https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-messages).
+3. **User-friendly Interaction**
+   - Personalized responses addressing users by their first name
+   - Step-by-step guidance through the receipt submission process
+   - Ability to review and correct extracted information
+   - Simple confirmation commands ("yes"/"confirm" or "no"/"cancel")
 
-## Step 1: Select Phone Numbers
+4. **Google Drive Integration**
+   - Automatically saves receipt images and PDFs to Google Drive
+   - Creates organized files with receipt numbers as filenames
+   - Provides secure links for future reference
 
-- Make sure WhatsApp is added to your App.
-- You begin with a test number that you can use to send messages to up to 5 numbers.
-- Go to API Setup and locate the test number from which you will be sending messages.
-- Here, you can also add numbers to send messages to. Enter your **own WhatsApp number**.
-- You will receive a code on your phone via WhatsApp to verify your number.
+5. **Spreadsheet Record Keeping**
+   - Stores all receipt data in a Google Sheet for easy tracking
+   - Assigns unique receipt numbers for reference
+   - Maintains timestamps for audit purposes
 
-## Step 2: Send Messages with the API
+### User Flow
 
-1. Obtain a 24-hour access token from the API access section.
-2. It will show an example of how to send messages using a `curl` command which can be send from the terminal or with a tool like Postman.
-3. Let's convert that into a [Python function with the request library](https://github.com/daveebbelaar/python-whatsapp-bot/blob/main/start/whatsapp_quickstart.py).
-4. Create a `.env` files based on `example.env` and update the required variables. [Video example here](https://www.youtube.com/watch?v=sOwG0bw0RNU).
-5. You will receive a "Hello World" message (Expect a 60-120 second delay for the message).
+1. User sends a receipt image or PDF to the WhatsApp bot
+2. Bot uploads the file to Google Drive for storage
+3. AI extracts receipt details from the image/document
+4. Bot presents the extracted information to the user for verification
+5. User can confirm or modify the extracted information 
+6. Upon confirmation, receipt details are stored in a Google Sheet
+7. User receives a confirmation message with their receipt number
 
-Creating an access that works longer then 24 hours
-1. Create a [system user at the Meta Business account level](https://business.facebook.com/settings/system-users).
-2. On the System Users page, configure the assets for your System User, assigning your WhatsApp app with full control. Don't forget to click the Save Changes button.
-   - [See step 1 here](https://github.com/daveebbelaar/python-whatsapp-bot/blob/main/img/meta-business-system-user-token.png)
-   - [See step 2 here](https://github.com/daveebbelaar/python-whatsapp-bot/blob/main/img/adding-assets-to-system-user.png)
-3. Now click `Generate new token` and select the app, and then choose how long the access token will be valid. You can choose 60 days or never expire.
-4. Select all the permissions, as I was running into errors when I only selected the WhatsApp ones.
-5. Confirm and copy the access token.
+### Admin Features
 
-Now we have to find the following information on the **App Dashboard**:
+- Admin notifications about user interactions and receipt submissions
+- Drive links included in admin notifications for easy access
+- Complete visibility of all receipt transactions
 
-- **APP_ID**: "<YOUR-WHATSAPP-BUSINESS-APP_ID>" (Found at App Dashboard)
-- **APP_SECRET**: "<YOUR-WHATSAPP-BUSINESS-APP_SECRET>" (Found at App Dashboard)
-- **RECIPIENT_WAID**: "<YOUR-RECIPIENT-TEST-PHONE-NUMBER>" (This is your WhatsApp ID, i.e., phone number. Make sure it is added to the account as shown in the example test message.)
-- **VERSION**: "v20.0" (The latest version of the Meta Graph API)
-- **ACCESS_TOKEN**: "<YOUR-SYSTEM-USER-ACCESS-TOKEN>" (Created in the previous step)
+### Technical Capabilities
 
-> You can only send a template type message as your first message to a user. That's why you have to send a reply first before we continue. Took me 2 hours to figure this out.
+- **Receipt Extraction**: Uses OpenAI's Vision API to intelligently extract text from images
+- **PDF Handling**: Uses pdf2image library to convert PDF documents to processable images
+- **Secure Storage**: Implements Google Drive API for reliable file storage
+- **Data Management**: Uses shelve database to temporarily store receipt details during processing
+- **Error Handling**: Graceful error recovery with user-friendly messages
 
+The system is designed to create a smooth, error-resistant receipt processing experience through WhatsApp, making expense tracking and management simple and accessible.
 
-## Step 3: Configure Webhooks to Receive Messages
+# Development & Deployment
 
-> Please note, this is the hardest part of this tutorial.
+## Technical Documentation
 
-#### Start your app
-- Make you have a python installation or environment and install the requirements: `pip install -r requirements.txt`
-- Run your Flask app locally by executing [run.py](https://github.com/daveebbelaar/python-whatsapp-bot/blob/main/run.py)
+For detailed information about the Flask application structure and implementation details, please refer to the [app/README.md](app/README.md) file.
 
-#### Launch ngrok
+## SSL Certificate Management
 
-The steps below are taken from the [ngrok documentation](https://ngrok.com/docs/integrations/whatsapp/webhooks/).
+The production server uses Let's Encrypt SSL certificates that need periodic renewal. The certificates for `idrea.diligent-devs.com` expire every 3 months (next on April 28, 2025, updated March 5th).
 
-> You need a static ngrok domain because Meta validates your ngrok domain and certificate!
+To check and renew SSL certificates:
 
-Once your app is running successfully on localhost, let's get it on the internet securely using ngrok!
-
-1. If you're not an ngrok user yet, just sign up for ngrok for free.
-2. Download the ngrok agent.
-3. Go to the ngrok dashboard, click Your [Authtoken](https://dashboard.ngrok.com/get-started/your-authtoken), and copy your Authtoken.
-4. Follow the instructions to authenticate your ngrok agent. You only have to do this once.
-5. On the left menu, expand Cloud Edge and then click Domains.
-6. On the Domains page, click + Create Domain or + New Domain. (here everyone can start with [one free domain](https://ngrok.com/blog-post/free-static-domains-ngrok-users))
-7. Start ngrok by running the following command in a terminal on your local desktop:
-```
-ngrok http 8000 --domain your-domain.ngrok-free.app
-```
-8. ngrok will display a URL where your localhost application is exposed to the internet (copy this URL for use with Meta).
-
-
-#### Integrate WhatsApp
-
-In the Meta App Dashboard, go to WhatsApp > Configuration, then click the Edit button.
-1. In the Edit webhook's callback URL popup, enter the URL provided by the ngrok agent to expose your application to the internet in the Callback URL field, with /webhook at the end (i.e. https://myexample.ngrok-free.app/webhook).
-2. Enter a verification token. This string is set up by you when you create your webhook endpoint. You can pick any string you like. Make sure to update this in your `VERIFY_TOKEN` environment variable.
-3. After you add a webhook to WhatsApp, WhatsApp will submit a validation post request to your application through ngrok. Confirm your localhost app receives the validation get request and logs `WEBHOOK_VERIFIED` in the terminal.
-4. Back to the Configuration page, click Manage.
-5. On the Webhook fields popup, click Subscribe to the **messages** field. Tip: You can subscribe to multiple fields.
-6. If your Flask app and ngrok are running, you can click on "Test" next to messages to test the subscription. You recieve a test message in upper case. If that is the case, your webhook is set up correctly.
-
-
-#### Testing the Integration
-Use the phone number associated to your WhatsApp product or use the test number you copied before.
-1. Add this number to your WhatsApp app contacts and then send a message to this number.
-2. Confirm your localhost app receives a message and logs both headers and body in the terminal.
-3. Test if the bot replies back to you in upper case.
-4. You have now succesfully integrated the bot! 🎉
-5. Now it's time to acutally build cool things with this.
-
-
-## Step 4: Understanding Webhook Security
-
-Below is some information from the Meta Webhooks API docs about verification and security. It is already implemented in the code, but you can reference it to get a better understanding of what's going on in [security.py](https://github.com/daveebbelaar/python-whatsapp-bot/blob/main/app/decorators/security.py)
-
-#### Verification Requests
-
-[Source](https://developers.facebook.com/docs/graph-api/webhooks/getting-started#:~:text=process%20these%20requests.-,Verification%20Requests,-Anytime%20you%20configure)
-
-Anytime you configure the Webhooks product in your App Dashboard, we'll send a GET request to your endpoint URL. Verification requests include the following query string parameters, appended to the end of your endpoint URL. They will look something like this:
-
-```
-GET https://www.your-clever-domain-name.com/webhook?
-  hub.mode=subscribe&
-  hub.challenge=1158201444&
-  hub.verify_token=meatyhamhock
+```bash
+# Check and renew SSL certificates if needed
+sudo certbot renew
 ```
 
-The verify_token, `meatyhamhock` in the case of this example, is a string that you can pick. It doesn't matter what it is as long as you store in the `VERIFY_TOKEN` environment variable.
+If certificates are not due for renewal yet, you'll see a message like:
+```
+The following certificates are not due for renewal yet:
+  /etc/letsencrypt/live/idrea.diligent-devs.com/fullchain.pem expires on 2025-04-28 (skipped)
+No renewals were attempted.
+```
 
-#### Validating Verification Requests
-
-[Source](https://developers.facebook.com/docs/graph-api/webhooks/getting-started#:~:text=Validating%20Verification%20Requests)
-
-Whenever your endpoint receives a verification request, it must:
-- Verify that the hub.verify_token value matches the string you set in the Verify Token field when you configure the Webhooks product in your App Dashboard (you haven't set up this token string yet).
-- Respond with the hub.challenge value.
-
-#### Validating Payloads
-
-[Source](https://developers.facebook.com/docs/graph-api/webhooks/getting-started#:~:text=int-,Validating%20Payloads,-We%20sign%20all)
-
-WhatsApp signs all Event Notification payloads with a SHA256 signature and include the signature in the request's X-Hub-Signature-256 header, preceded with sha256=. You don't have to validate the payload, but you should.
-
-To validate the payload:
-- Generate a SHA256 signature using the payload and your app's App Secret.
-- Compare your signature to the signature in the X-Hub-Signature-256 header (everything after sha256=). If the signatures match, the payload is genuine.
-
-
-## Step 5: Learn about the API and Build Your App
-
-Review the developer documentation to learn how to build your app and start sending messages. [See documentation](https://developers.facebook.com/docs/whatsapp/cloud-api).
-
-## Step 6: Integrate AI into the Application
-
-Now that we have an end to end connection, we can make the bot a little more clever then just shouting at us in upper case. All you have to do is come up with your own `generate_response()` function in [whatsapp_utils.py](https://github.com/daveebbelaar/python-whatsapp-bot/blob/main/app/utils/whatsapp_utils.py).
-
-If you want a cookie cutter example to integrate the OpenAI Assistans API with a retrieval tool, then follow these steps.
-1. Watch this video: [OpenAI Assistants Tutorial](https://www.youtube.com/watch?v=0h1ry-SqINc)
-2. Create your own assistant with OpenAI and update your `OPENAI_API_KEY` and `OPENAI_ASSISTANT_ID` in the environment variables.
-3. Provide your assistant with data and instructions
-4. Update [openai_service.py](https://github.com/daveebbelaar/python-whatsapp-bot/blob/main/app/services/openai_service.py) to your use case.
-5. Import `generate_reponse` into [whatsapp_utils.py](https://github.com/daveebbelaar/python-whatsapp-bot/blob/main/app/utils/)
-6. Update `process_whatsapp_message()` with the new `generate_reponse()` function.
-
-## Step 7: Add a Phone Number
-
-When you're ready to use your app for a production use case, you need to use your own phone number to send messages to your users.
-
-To start sending messages to any WhatsApp number, add a phone number. To manage your account information and phone number, [see the Overview page.](https://business.facebook.com/wa/manage/home/) and the [WhatsApp docs](https://developers.facebook.com/docs/whatsapp/phone-numbers/).
-
-If you want to use a number that is already being used in the WhatsApp customer or business app, you will have to fully migrate that number to the business platform. Once the number is migrated, you will lose access to the WhatsApp customer or business app. [See Migrate Existing WhatsApp Number to a Business Account for information](https://developers.facebook.com/docs/whatsapp/cloud-api/get-started/migrate-existing-whatsapp-number-to-a-business-account).
-
-Once you have chosen your phone number, you have to add it to your WhatsApp Business Account. [See Add a Phone Number](https://developers.facebook.com/docs/whatsapp/cloud-api/get-started/add-a-phone-number).
-
-When dealing with WhatsApp Business API and wanting to experiment without affecting your personal number, you have a few options:
-
-1. Buy a New SIM Card
-2. Virtual Phone Numbers
-3. Dual SIM Phones
-4. Use a Different Device
-5. Temporary Number Services
-6. Dedicated Devices for Development
-
-**Recommendation**: If this is for a more prolonged or professional purpose, using a virtual phone number service or purchasing a new SIM card for a dedicated device is advisable. For quick tests, a temporary number might suffice, but always be cautious about security and privacy. Remember that once a number is associated with WhatsApp Business API, it cannot be used with regular WhatsApp on a device unless you deactivate it from the Business API and reverify it on the device.
-
-## Datalumina
-
-This document is provided to you by Datalumina. We help data analysts, engineers, and scientists launch and scale a successful freelance business — $100k+ /year, fun projects, happy clients. If you want to learn more about what we do, you can visit our [website](https://www.datalumina.com/) and subscribe to our [newsletter](https://www.datalumina.com/newsletter). Feel free to share this document with your data friends and colleagues.
-
-## Tutorials
-For video tutorials, visit the YouTube channel: [youtube.com/@daveebbelaar](youtube.com/@daveebbelaar)
-
-# Tslil & Daniel Docs
+It's good practice to run this command monthly, though Let's Encrypt certificates are valid for 90 days. You can also set up a cron job to automate this process.
 
 ## Running the app
 
-### Prerequisites
+### Production Deployment
 
-1. Build the app docker container: `docker build -f Dockerfile . -t <commit SHA> --platform=linux/amd64`
-2. Save the docker container: `docker save -o nadlan-bot.tar <docker image>`
-3. Copy the docker container: `scp nadlan-bot.tar <ssh hostname>:~`
-4. Load the docker container to the local registry: `docker load --input nadlan-bot.tar`
+1. Build the app docker container: `docker build -f Dockerfile . -t <tag or commit SHA> --platform=linux/amd64`
+2. Save the docker container: `docker save -o idrea-bot.tar <docker image>`
+3. Copy the docker container: `scp idrea-bot.tar <ssh hostname>:~`
+4. Load the docker container to the local registry: `docker load --input idrea-bot.tar`
+5. Run the container on the production server: `docker run -d -p 8000:8000 --rm -v ~/idrea/.env:/app/.env <docker image>`
 
-### Follow the steps on the VM
+The production server is configured with a reverse proxy that routes traffic from `https://idrea.diligent-devs.com/webhook` to the Docker container running on port 8000.
 
-1. `docker run -d -p 8000:8000 --rm -v ~/NadlanBot/.env:/app/.env <docker image uploaded local registry>`
-2. `docker run -d --net=host -it -e NGROK_AUTHTOKEN=<ngrok auth token> ngrok/ngrok:latest http --domain=peaceful-jaguar-social.ngrok-free.app 8000`
+### Local Development with Tunneling
 
-### To launch ngrok locally: 
-1. Make sure the docker is down in the server
-2. `ngrok http --domain=peaceful-jaguar-social.ngrok-free.app 8000`
+For local development, you need a tunneling service like localtunnel to make your local server accessible to WhatsApp's webhooks:
+
+```bash
+# Install localtunnel globally
+npm install -g localtunnel
+
+# Create a tunnel to your local server
+lt --port 8080 --subdomain curly-laws-smile-just-for-me
+```
+
+Your local webhook URL will be: `https://curly-laws-smile-just-for-me.loca.lt/webhook`
 
 # Development Tools
 
@@ -337,15 +229,33 @@ The application is containerized using Docker, which makes it easy to run consis
 
 1. Install [Docker](https://www.docker.com/get-started) and [Docker Compose](https://docs.docker.com/compose/install/) on your machine
 2. Clone the repository to your local machine
-3. Create a `.env` file in the root directory with the required environment variables (see `example.env` for reference)
+3. Create a `.env` file in the root directory with the required environment variables (see below for reference)
+
+### Environment Variables
+
+The following environment variables should be defined in your `.env` file:
+
+```
+OPENAI_API_KEY=your_openai_api_key
+GOOGLE_SERVICE_ACCOUNT_FILE=path_to_service_account_file
+GOOGLE_CREDENTIALS_JSON=your_google_credentials_json
+GOOGLE_SHEET_ID=your_google_sheet_id
+GOOGLE_FOLDER_ID=your_google_folder_id
+ACCESS_TOKEN=your_access_token
+APP_SECRET=your_app_secret
+RECIPIENT_WAID=your_recipient_waid
+VERSION=your_version
+PHONE_NUMBER_ID=your_phone_number_id
+VERIFY_TOKEN=your_verify_token
+```
 
 ### Starting the Docker Container
 
 1. Build and start the Docker container:
 
 ```bash
-# Build and start the container in detached mode
-docker-compose up --build -d
+# Build and start the server in detached mode
+docker-compose build server && docker-compose up -d server
 ```
 
 2. Check if the container is running:
@@ -358,13 +268,13 @@ docker-compose ps
 
 ```bash
 # View all logs
-docker-compose logs
+docker-compose logs server
 
 # View the last 50 lines
-docker-compose logs --tail=50
+docker-compose logs --tail=50 server
 
 # Follow the logs in real-time
-docker-compose logs --follow
+docker-compose logs --follow server
 ```
 
 4. Stop the container:
@@ -378,12 +288,12 @@ docker-compose down
 When you make changes to the code, you need to rebuild the Docker container:
 
 ```bash
-docker-compose down && docker-compose up --build -d
+docker-compose build server && docker-compose up -d server
 ```
 
 ## Exposing Your Local Server with Localtunnel
 
-To test webhooks, you need to expose your local server to the internet. [Localtunnel](https://github.com/localtunnel/localtunnel) is a simple and lightweight tool for this purpose.
+To test webhooks, you need to expose your local server to the internet using Localtunnel.
 
 ### Installing Localtunnel
 
@@ -395,56 +305,46 @@ npm install -g localtunnel
 ### Using Localtunnel
 
 1. Start your Docker container as described above
-2. In a separate terminal, run localtunnel to expose your local server:
+2. In a separate terminal, run localtunnel to expose your local server with a fixed subdomain:
 
 ```bash
-# Basic usage (random subdomain)
-lt --port 8080
-
-# With a specific subdomain (if available)
-lt --port 8080 --subdomain your-preferred-subdomain
+# With the specific subdomain used in Meta Developer Portal
+lt --port 8080 --subdomain curly-laws-smile-just-for-me
 ```
 
-3. Localtunnel will provide a URL (e.g., `https://wicked-swans-rule.loca.lt`) that you can use to access your local server from the internet
+3. Your localtunnel URL will be: `https://curly-laws-smile-just-for-me.loca.lt`
 
 4. To check if the tunnel is working, visit the health endpoint:
 
 ```bash
-curl https://your-tunnel-url.loca.lt/health
+curl https://curly-laws-smile-just-for-me.loca.lt/health
 ```
 
 5. To stop localtunnel, press `Ctrl+C` in the terminal where it's running
 
-### Important Notes About Localtunnel
+## Configuring WhatsApp Webhook for Development vs Production
 
-- The URL changes each time you restart localtunnel unless you specify a subdomain
-- If you're configuring webhooks in external services (like Meta Developer Portal), you'll need to update the URL whenever it changes
-- For the WhatsApp webhook, use the URL with `/webhook` appended (e.g., `https://wicked-swans-rule.loca.lt/webhook`)
-- Localtunnel sessions may expire after some time of inactivity
+### Development Webhook
+For local development, the webhook URL is:
+- **Webhook URL**: `https://curly-laws-smile-just-for-me.loca.lt/webhook`
 
-### Checking the Localtunnel URL
+### Production Webhook
+For production, the webhook URL is:
+- **Production Webhook URL**: `https://idrea.diligent-devs.com/webhook`
 
-If you need to check the current localtunnel URL:
+### Setting Up the Webhook in Meta Developer Portal
 
-```bash
-# Start localtunnel with the print-url option
-lt --port 8080 --print-url
-
-# Or check running processes
-ps aux | grep lt
-```
-
-## Configuring WhatsApp Webhook for Local Development
-
-1. Start your Docker container and localtunnel as described above
-2. In the Meta Developer Portal, configure your webhook with:
-   - **Callback URL**: Your localtunnel URL + `/webhook` (e.g., `https://wicked-swans-rule.loca.lt/webhook`)
-   - **Verify Token**: The value you set in your `.env` file for `VERIFY_TOKEN` (e.g., `1234`)
+1. Navigate to the Meta Developer Portal and go to your WhatsApp business app
+2. Configure your webhook with:
+   - **Callback URL**: The development or production URL depending on your needs
+   - **Verify Token**: The value you set in your `.env` file for `VERIFY_TOKEN`
    - **Subscribe to**: The `messages` field
+
 3. Test the webhook verification by visiting:
    ```
-   https://your-tunnel-url.loca.lt/webhook?hub.mode=subscribe&hub.verify_token=YOUR_VERIFY_TOKEN&hub.challenge=CHALLENGE_ACCEPTED
+   https://curly-laws-smile-just-for-me.loca.lt/webhook?hub.mode=subscribe&hub.verify_token=YOUR_VERIFY_TOKEN&hub.challenge=CHALLENGE_ACCEPTED
    ```
+
 4. If configured correctly, you should see `CHALLENGE_ACCEPTED` as the response
 
 ## Troubleshooting

@@ -1,15 +1,19 @@
+# Core dependencies
 requests>=2.25.1,<2.32.0
-DateTime~=5.4
 flask~=3.0.0
-google~=3.0.0
-google-api-python-client
-google-auth-oauthlib
 openai~=1.7.0
 python-dotenv~=1.0.0
-aiohttp~=3.9.1
 pillow~=10.1.0
 
-# Optional: Only needed for PDF processing
-# Uncomment if PDF receipt processing is required
+# Google API dependencies
+google-api-python-client
+google-auth-oauthlib
+
+# PDF processing capabilities
 pdf2image~=1.16.3
-poppler-utils  # Install via apt-get on Ubuntu/Debian
+# Note: poppler-utils is installed via apt-get in the Dockerfile
+
+# Removed unnecessary packages:
+# - DateTime (standard datetime module is used instead)
+# - aiohttp (not used in the main application)
+# - google~=3.0.0 (redundant with google-api-python-client)
