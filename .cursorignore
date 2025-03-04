@@ -1,0 +1,19 @@
+# Follow same pattern as .gitignore
+.env
+*.pem
+token.json
+credentials.json
+*credentials*.json
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+*.log
+nohup.out
+*.tar
+data/temp_receipts/
+threads_db*
+.DS_Store
+node_modules/ 
