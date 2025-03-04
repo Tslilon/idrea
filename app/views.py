@@ -24,22 +24,48 @@ def handle_message():
     try:
         # Get the request body
         data = request.get_json()
-        logging.info(f"Processing webhook data in handle_message: {json.dumps(data, indent=2)}")
         
-        # Check if this is a WhatsApp API event
+        # Check if this contains actual messages or just status updates
+        contains_messages = False
+        if "object" in data and data["object"] == "whatsapp_business_account":
+            if "entry" in data and len(data["entry"]) > 0:
+                entry = data["entry"][0]
+                if "changes" in entry and len(entry["changes"]) > 0:
+                    change = entry["changes"][0]
+                    if "value" in change:
+                        value = change["value"]
+                        if "messages" in value and len(value["messages"]) > 0:
+                            contains_messages = True
+        
+        # Only log detailed info if this contains actual messages or debugging is enabled
+        if contains_messages:
+            logging.info(f"Processing webhook data with messages: {json.dumps(data, indent=2)}")
+        else:
+            # Minimal logging for status updates
+            if "entry" in data and len(data["entry"]) > 0 and "changes" in data["entry"][0]:
+                change = data["entry"][0]["changes"][0]
+                if "value" in change and "statuses" in change["value"]:
+                    status = change["value"]["statuses"][0]["status"]
+                    msg_id = change["value"]["statuses"][0]["id"]
+                    logging.debug(f"Status update: {status} for message {msg_id}")
+        
+        # Process all webhooks as before
         if "object" in data and data["object"] == "whatsapp_business_account":
             # Extract the message data
             if "entry" in data and len(data["entry"]) > 0:
                 entry = data["entry"][0]
-                logging.info(f"Processing entry: {json.dumps(entry, indent=2)}")
+                if contains_messages:
+                    logging.info(f"Processing entry: {json.dumps(entry, indent=2)}")
                 
                 if "changes" in entry and len(entry["changes"]) > 0:
                     change = entry["changes"][0]
-                    logging.info(f"Processing change: {json.dumps(change, indent=2)}")
+                    if contains_messages:
+                        logging.info(f"Processing change: {json.dumps(change, indent=2)}")
                     
                     if "value" in change:
                         value = change["value"]
-                        logging.info(f"Processing value: {json.dumps(value, indent=2)}")
+                        if contains_messages:
+                            logging.info(f"Processing value: {json.dumps(value, indent=2)}")
                         
                         # Check if there are messages
                         if "messages" in value and len(value["messages"]) > 0:
@@ -57,13 +83,17 @@ def handle_message():
                                 else:
                                     logging.warning(f"Invalid message format: {message}")
                         else:
-                            logging.info("No messages found in the webhook payload")
+                            if contains_messages:
+                                logging.info("No messages found in the webhook payload")
                     else:
-                        logging.warning("No 'value' field in the change object")
+                        if contains_messages:
+                            logging.warning("No 'value' field in the change object")
                 else:
-                    logging.warning("No 'changes' field in the entry object")
+                    if contains_messages:
+                        logging.warning("No 'changes' field in the entry object")
             else:
-                logging.warning("No 'entry' field in the webhook payload")
+                if contains_messages:
+                    logging.warning("No 'entry' field in the webhook payload")
             
             # Return a 200 OK response to acknowledge receipt of the event
             return jsonify({"status": "success"}), 200
@@ -109,12 +139,26 @@ def webhook_get():
 def webhook_post():
     logging.info("Received webhook POST request")
     try:
-        # Log the raw request payload
-        logging.info(f"Webhook payload: {request.get_data(as_text=True)}")
-        
         # Get the request body
         data = request.get_json()
-        logging.info(f"Parsed webhook data: {json.dumps(data, indent=2)}")
+        
+        # Check if this contains actual messages or just status updates
+        contains_messages = False
+        if "object" in data and data["object"] == "whatsapp_business_account":
+            if "entry" in data and len(data["entry"]) > 0:
+                entry = data["entry"][0]
+                if "changes" in entry and len(entry["changes"]) > 0:
+                    change = entry["changes"][0]
+                    if "value" in change:
+                        value = change["value"]
+                        if "messages" in value and len(value["messages"]) > 0:
+                            contains_messages = True
+        
+        # Only log detailed webhook payload if it contains actual messages
+        if contains_messages:
+            # Log the raw request payload for actual messages
+            logging.info(f"Webhook payload: {request.get_data(as_text=True)}")
+            logging.info(f"Parsed webhook data: {json.dumps(data, indent=2)}")
         
         # Check if this is a WhatsApp API event
         if "object" in data and data["object"] == "whatsapp_business_account":

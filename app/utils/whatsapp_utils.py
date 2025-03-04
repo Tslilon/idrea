@@ -347,53 +347,67 @@ def process_text_message(text, name, creds, sender_waid):
     
     # Handle confirmation responses
     text_lower = text.lower().strip()
-    if stored_receipt and (text_lower in ["confirm", "yes"]):
-        # User is confirming extracted receipt details
-        logging.info("User confirming receipt details")
-        
-        # Get the receipt number that was created earlier
-        # Prepare the data from previously extracted receipt
-        update_data = [stored_receipt.get("sender_name", name)]  # Use stored name or fallback to current name
-        
-        fields_to_process = ["what", "amount", "iva", "receipt", "store_name", "payment_method", "charge_to", "comments"]
-        for field in fields_to_process:
-            update_data.append(stored_receipt.get(field, ""))
-        
-        # Remove the stored receipt
-        delete_stored_receipt(sender_waid)
-        
-        # Write to Google Sheets
-        receipt_num = append_to_sheet(creds, sheet_id, update_data)
-        
-        # Send confirmation
-        confirm_message = f"Thank you! I've saved your receipt details. Your receipt number is {receipt_num}."
-        data = get_text_message_input(sender_waid, confirm_message)
-        send_message(data)
-        
-        # Update admins
-        admin_message = f"{name} confirmed receipt details. Receipt {receipt_num} added to spreadsheet."
-        update_admins(admin_message, sender_waid)
-        
-        return
+    
+    # Handle confirmation keywords
+    if text_lower in ["confirm", "yes"]:
+        if stored_receipt:
+            # User is confirming extracted receipt details
+            logging.info("User confirming receipt details")
+            
+            # Get the receipt number that was created earlier
+            # Prepare the data from previously extracted receipt
+            update_data = [stored_receipt.get("sender_name", name)]  # Use stored name or fallback to current name
+            
+            fields_to_process = ["what", "amount", "iva", "receipt", "store_name", "payment_method", "charge_to", "comments"]
+            for field in fields_to_process:
+                update_data.append(stored_receipt.get(field, ""))
+            
+            # Remove the stored receipt
+            delete_stored_receipt(sender_waid)
+            
+            # Write to Google Sheets
+            receipt_num = append_to_sheet(creds, sheet_id, update_data)
+            
+            # Send confirmation
+            confirm_message = f"Thank you! I've saved your receipt details. Your receipt number is {receipt_num}."
+            data = get_text_message_input(sender_waid, confirm_message)
+            send_message(data)
+            
+            # Update admins
+            admin_message = f"{name} confirmed receipt details. Receipt {receipt_num} added to spreadsheet."
+            update_admins(admin_message, sender_waid)
+            
+            return
+        else:
+            # No stored receipt details for this user
+            data = get_text_message_input(sender_waid, "I don't have any pending receipt details to confirm. You can send a new receipt image or enter details manually.")
+            send_message(data)
+            return
     
     # Handle cancellation responses
-    elif stored_receipt and (text_lower in ["cancel", "no"]):
-        # User wants to cancel the receipt
-        logging.info("User cancelling receipt")
-        
-        # Remove the stored receipt
-        delete_stored_receipt(sender_waid)
-        
-        # Send confirmation of cancellation
-        cancel_message = "I've cancelled this receipt. No information was saved."
-        data = get_text_message_input(sender_waid, cancel_message)
-        send_message(data)
-        
-        # Update admins
-        admin_message = f"{name} cancelled their receipt submission."
-        update_admins(admin_message, sender_waid)
-        
-        return
+    elif text_lower in ["cancel", "no"]:
+        if stored_receipt:
+            # User wants to cancel the receipt
+            logging.info("User cancelling receipt")
+            
+            # Remove the stored receipt
+            delete_stored_receipt(sender_waid)
+            
+            # Send confirmation of cancellation
+            cancel_message = "I've cancelled this receipt. No information was saved."
+            data = get_text_message_input(sender_waid, cancel_message)
+            send_message(data)
+            
+            # Update admins
+            admin_message = f"{name} cancelled their receipt submission."
+            update_admins(admin_message, sender_waid)
+            
+            return
+        else:
+            # No stored receipt details for this user
+            data = get_text_message_input(sender_waid, "I don't have any pending receipt details to cancel. You can send a new receipt image or enter details manually.")
+            send_message(data)
+            return
     
     # Handle field updates for an existing receipt
     elif stored_receipt and not (text_lower in ["confirm", "yes", "cancel", "no"]):

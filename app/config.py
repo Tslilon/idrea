@@ -17,8 +17,12 @@ def load_configurations(app):
 
 
 def configure_logging():
+    # Get log level from environment variable or default to INFO
+    log_level_name = os.getenv("LOG_LEVEL", "INFO")
+    log_level = getattr(logging, log_level_name.upper(), logging.INFO)
+    
     logging.basicConfig(
-        level=logging.INFO,
+        level=log_level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         stream=sys.stdout,
     )

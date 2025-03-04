@@ -284,6 +284,16 @@ def format_extracted_details_for_whatsapp(details):
     store_name = details.get("store_name", "")
     message.append(f"Store name: {store_name}")
     
+    # Payment Method (if available)
+    payment_method = details.get("payment_method", "")
+    if payment_method:
+        message.append(f"Payment method: {payment_method}")
+    
+    # Charge To (if available)
+    charge_to = details.get("charge_to", "")
+    if charge_to:
+        message.append(f"Charge to: {charge_to}")
+    
     # Additional comments/notes (if any)
     comments = details.get("comments", "")
     if comments:
