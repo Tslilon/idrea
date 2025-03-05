@@ -117,16 +117,27 @@ def process_text_for_whatsapp(text):
 
 
 def upload_image_to_drive(credentials, folder_id, file_path, file_name):
-    service = build('drive', 'v3', credentials=credentials)
-    file_metadata = {
-        'name': file_name,
-        'parents': [folder_id]
-    }
-    media = MediaFileUpload(file_path, mimetype='image/jpeg')  # Adjust mimetype if necessary
-    file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-    print("File ID: %s" % file.get('id'))
-
-    return file.get('id')
+    if credentials is None:
+        logging.error("Cannot upload to Google Drive: credentials are not available")
+        return None
+    
+    try:
+        service = build('drive', 'v3', credentials=credentials)
+        file_metadata = {
+            'name': file_name,
+            'parents': [folder_id]
+        }
+        media = MediaFileUpload(file_path, mimetype='image/jpeg')  # Adjust mimetype if necessary
+        file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        file_id = file.get('id')
+        logging.info(f"File uploaded to Google Drive with ID: {file_id}")
+        
+        # Create and return a shareable link
+        drive_link = f"https://drive.google.com/file/d/{file_id}/view"
+        return drive_link
+    except Exception as e:
+        logging.error(f"Error uploading file to Google Drive: {str(e)}")
+        return None
 
 
 def process_whatsapp_message(message, phone_number_id):
@@ -158,6 +169,10 @@ def process_whatsapp_message(message, phone_number_id):
         
         # Load credentials for Google services
         creds = load_credentials()
+        if creds is None:
+            logging.warning("Google API credentials not available. Some functionality will be limited.")
+            # We'll continue processing but functions that require credentials will handle the None case
+        
         folder_id = os.getenv("GOOGLE_FOLDER_ID")
         sheet_id = os.getenv("GOOGLE_SHEET_ID")
         
@@ -279,15 +294,27 @@ def get_document_url_from_whatsapp(document_id):
 
 
 def upload_document_to_drive(credentials, folder_id, file_path, file_name):
-    # Similar to upload_image_to_drive but adjust mimetype for PDFs
-    mimetype = 'application/pdf'  # For PDF files
+    if credentials is None:
+        logging.error("Cannot upload to Google Drive: credentials are not available")
+        return None
+    
+    try:
+        # Similar to upload_image_to_drive but adjust mimetype for PDFs
+        mimetype = 'application/pdf'  # For PDF files
 
-    service = build('drive', 'v3', credentials=credentials)
-    file_metadata = {'name': file_name, 'parents': [folder_id]}
-    media = MediaFileUpload(file_path, mimetype=mimetype)
-    file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-    print("File ID: %s" % file.get('id'))
-    return file.get('id')
+        service = build('drive', 'v3', credentials=credentials)
+        file_metadata = {'name': file_name, 'parents': [folder_id]}
+        media = MediaFileUpload(file_path, mimetype=mimetype)
+        file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        file_id = file.get('id')
+        logging.info(f"Document uploaded to Google Drive with ID: {file_id}")
+        
+        # Create and return a shareable link
+        drive_link = f"https://drive.google.com/file/d/{file_id}/view"
+        return drive_link
+    except Exception as e:
+        logging.error(f"Error uploading document to Google Drive: {str(e)}")
+        return None
 
 
 def download_document(document_url):
@@ -756,17 +783,40 @@ google_creds_json = 'data/credentials.json'
 
 
 def get_client_info():
-    with open(google_creds_json) as f:
-        data = json.load(f)
-    client_id = data['installed']['client_id']
-    client_secret = data['installed']['client_secret']
-    return client_id, client_secret
+    try:
+        with open(google_creds_json) as f:
+            data = json.load(f)
+        
+        # Try to get credentials from both standard OAuth and service account formats
+        if 'installed' in data:
+            # OAuth client format
+            client_id = data['installed']['client_id']
+            client_secret = data['installed']['client_secret']
+            return client_id, client_secret
+        elif 'client_id' in data:
+            # Service account format - extract client_id directly
+            client_id = data['client_id']
+            # No client_secret in service accounts but we need a value
+            client_secret = "service_account"
+            logging.info("Using service account client ID for OAuth operations")
+            return client_id, client_secret
+        else:
+            logging.warning(f"No recognized credential format found in {google_creds_json}")
+            return None, None
+    except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
+        logging.warning(f"Error loading OAuth credentials: {str(e)}")
+        return None, None
 
 
+# Initialize CLIENT_ID and CLIENT_SECRET, but don't fail if they're not available
 CLIENT_ID, CLIENT_SECRET = get_client_info()
 
 
 def refresh_access_token(refresh_token):
+    if not CLIENT_ID or not CLIENT_SECRET:
+        logging.error("Cannot refresh token: OAuth client credentials not available")
+        return None, None
+        
     params = {
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
@@ -787,100 +837,139 @@ import googleapiclient.discovery
 
 
 def load_credentials():
+    try:
+        SERVICE_ACCOUNT_FILE = os.getenv('GOOGLE_SERVICE_ACCOUNT_FILE')
+        if not SERVICE_ACCOUNT_FILE or not os.path.exists(SERVICE_ACCOUNT_FILE):
+            logging.warning(f"Service account file not found at {SERVICE_ACCOUNT_FILE}. Checking fallback locations...")
+            # Try fallback locations
+            fallback_files = [
+                'data/nadlanbot-410712-58847aeaca48.json',  # idrea-607@nadlanbot-410712.iam.gserviceaccount.com
+                'data/nadlanbot-410712-0929523261c7.json'   # list-editor@nadlanbot-410712.iam.gserviceaccount.com
+            ]
+            
+            for file_path in fallback_files:
+                if os.path.exists(file_path):
+                    logging.info(f"Using fallback service account file: {file_path}")
+                    SERVICE_ACCOUNT_FILE = file_path
+                    break
+            
+            if not SERVICE_ACCOUNT_FILE or not os.path.exists(SERVICE_ACCOUNT_FILE):
+                logging.error("No valid service account file found. Authentication will fail.")
+                return None
+        
+        # Define the scopes required by your application
+        SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
 
-    SERVICE_ACCOUNT_FILE = os.getenv('GOOGLE_SERVICE_ACCOUNT_FILE')
-    # Define the scopes required by your application
-    SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
-
-    # Authenticate using the service account
-    creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-
-    return creds
+        # Authenticate using the service account
+        creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        return creds
+    except Exception as e:
+        logging.error(f"Error loading service account credentials: {str(e)}")
+        return None
 
 
 def get_receipt_number(credentials, sheet_id):
-    service = build('sheets', 'v4', credentials=credentials)
+    if credentials is None:
+        logging.error("Cannot get receipt number: credentials are not available")
+        return None
+    
+    try:
+        service = build('sheets', 'v4', credentials=credentials)
 
-    # Specify the sheet and range to read.
-    range_to_read = 'iDrea!A2:A'  # Assuming 'A2:A' contains receipt numbers, adjust as needed
+        # Specify the sheet and range to read.
+        range_to_read = 'iDrea!A2:A'  # Assuming 'A2:A' contains receipt numbers, adjust as needed
 
-    # Call the Sheets API to read data
-    result = service.spreadsheets().values().get(
-        spreadsheetId=sheet_id,
-        range=range_to_read).execute()
+        # Call the Sheets API to read data
+        result = service.spreadsheets().values().get(
+            spreadsheetId=sheet_id,
+            range=range_to_read).execute()
 
-    values = result.get('values', [])
+        values = result.get('values', [])
 
-    # Extract receipt numbers and find the max
-    receipt_numbers = [int(row[0]) for row in values if row and row[0].isdigit()]
-    max_receipt_number = max(receipt_numbers, default=0)  # Default to 0 if list is empty
+        # Extract receipt numbers and find the max
+        receipt_numbers = [int(row[0]) for row in values if row and row[0].isdigit()]
+        max_receipt_number = max(receipt_numbers, default=0)  # Default to 0 if list is empty
 
-    return max_receipt_number + 1
+        return max_receipt_number + 1
+    except Exception as e:
+        logging.error(f"Error getting receipt number: {str(e)}")
+        return None
 
 
 def append_to_sheet(credentials, sheet_id, values_list):
-    service = build('sheets', 'v4', credentials=credentials)
-
-    # Specify the sheet and the range where data will be appended.
-    range = 'iDrea!A:K'  # Update this with your actual sheet name and range
-
-    # Convert timestamp to readable format
-    time = datetime.now().strftime('%Y-%m-%d %H:%M')
-
-    # Get the next receipt number
-    next_receipt_number = get_receipt_number(credentials, sheet_id)
+    if credentials is None:
+        logging.error("Cannot append to Google Sheet: credentials are not available")
+        return None
     
-    # Process values but with minimal formatting - preserve exact decimal values
-    processed_values = []
-    for value in values_list:
-        if isinstance(value, str) and value:
-            # Check if this looks like a numeric value (amount or IVA)
-            # First, standardize to US format (period as decimal) for processing
-            cleaned_value = value.strip()
-            
-            # Convert comma to period for standard processing
-            if ',' in cleaned_value:
-                cleaned_value = cleaned_value.replace(',', '.')
-            
-            # Now check if it's a valid number
-            if cleaned_value and (cleaned_value.replace('.', '', 1).isdigit() or 
-                                (cleaned_value.startswith('-') and cleaned_value[1:].replace('.', '', 1).isdigit())):
-                try:
-                    # Parse as float for standardization
-                    num_value = float(cleaned_value)
-                    
-                    # Just save the exact value as a string with European formatting (comma as decimal)
-                    # This is the simplest approach to preserve exact values
-                    euro_format = str(num_value).replace('.', ',')
-                    
-                    processed_values.append(euro_format)
-                    logging.info(f"Formatted number (simple): {value} -> {euro_format}")
-                except ValueError:
-                    # If conversion fails, keep the original
-                    processed_values.append(value)
-                    logging.info(f"Could not convert to number, keeping original: {value}")
+    try:
+        service = build('sheets', 'v4', credentials=credentials)
+
+        # Specify the sheet and the range where data will be appended.
+        range = 'iDrea!A:K'  # Update this with your actual sheet name and range
+
+        # Convert timestamp to readable format
+        time = datetime.now().strftime('%Y-%m-%d %H:%M')
+
+        # Get the next receipt number
+        next_receipt_number = get_receipt_number(credentials, sheet_id)
+        if next_receipt_number is None:
+            logging.error("Failed to get next receipt number")
+            return None
+        
+        # Process values but with minimal formatting - preserve exact decimal values
+        processed_values = []
+        for value in values_list:
+            if isinstance(value, str) and value:
+                # Check if this looks like a numeric value (amount or IVA)
+                # First, standardize to US format (period as decimal) for processing
+                cleaned_value = value.strip()
+                
+                # Convert comma to period for standard processing
+                if ',' in cleaned_value:
+                    cleaned_value = cleaned_value.replace(',', '.')
+                
+                # Now check if it's a valid number
+                if cleaned_value and (cleaned_value.replace('.', '', 1).isdigit() or 
+                                    (cleaned_value.startswith('-') and cleaned_value[1:].replace('.', '', 1).isdigit())):
+                    try:
+                        # Parse as float for standardization
+                        num_value = float(cleaned_value)
+                        
+                        # Just save the exact value as a string with European formatting (comma as decimal)
+                        # This is the simplest approach to preserve exact values
+                        euro_format = str(num_value).replace('.', ',')
+                        
+                        processed_values.append(euro_format)
+                        logging.info(f"Formatted number (simple): {value} -> {euro_format}")
+                    except ValueError:
+                        # If conversion fails, keep the original
+                        processed_values.append(value)
+                        logging.info(f"Could not convert to number, keeping original: {value}")
+                else:
+                    processed_values.append(value)  # Non-string values
             else:
-                processed_values.append(value)  # Keep as string
-        else:
-            processed_values.append(value)  # Non-string values
+                processed_values.append(value)  # Non-string values
 
-    # Prepare the data to append.
-    values = [next_receipt_number, time] + processed_values
-    body = {'values': [values]}
+        # Prepare the data to append.
+        values = [next_receipt_number, time] + processed_values
+        body = {'values': [values]}
 
-    # Log the values being sent to Google Sheets
-    logging.info(f"Appending to Google Sheet: {values}")
+        # Log the values being sent to Google Sheets
+        logging.info(f"Appending to Google Sheet: {values}")
 
-    # Call the Sheets API
-    result = service.spreadsheets().values().append(
-        spreadsheetId=sheet_id,
-        range=range,
-        valueInputOption='USER_ENTERED',
-        body=body).execute()
+        # Call the Sheets API
+        result = service.spreadsheets().values().append(
+            spreadsheetId=sheet_id,
+            range=range,
+            valueInputOption='USER_ENTERED',
+            body=body).execute()
 
-    logging.info(f"{result.get('updates').get('updatedCells')} cells appended.")
-    
-    return next_receipt_number
+        logging.info(f"{result.get('updates').get('updatedCells')} cells appended.")
+        
+        return next_receipt_number
+    except Exception as e:
+        logging.error(f"Error appending to Google Sheet: {str(e)}")
+        return None
 
 
 def get_image_url_from_whatsapp(image_id):
@@ -1436,6 +1525,10 @@ def delete_file_from_drive(credentials, file_id):
     Returns:
         Boolean indicating success
     """
+    if credentials is None:
+        logging.error("Cannot delete file from Google Drive: credentials are not available")
+        return False
+        
     try:
         service = build('drive', 'v3', credentials=credentials)
         service.files().delete(fileId=file_id).execute()

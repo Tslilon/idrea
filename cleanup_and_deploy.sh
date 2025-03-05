@@ -91,6 +91,9 @@ if [[ $confirm != [yY] ]]; then
     exit 0
 fi
 
+# Ensure SSH key has correct permissions
+chmod 600 "$SSH_KEY"
+
 # Step 1: SSH into the server and clean up all Docker containers and redundant files
 echo "Step 1: Cleaning up the server..."
 ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << 'EOF'
@@ -112,26 +115,26 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << 'EOF'
     
     # Save important files before cleanup
     if [ -f ~/NadlanBot/.env ]; then
-        cp ~/NadlanBot/.env ~/backups/.env
+        cp ~/NadlanBot/.env ~/backups/.env || true
     fi
     
     if [ -f ~/NadlanBot/token.json ]; then
-        cp ~/NadlanBot/token.json ~/backups/token.json
+        cp ~/NadlanBot/token.json ~/backups/token.json || true
     fi
     
     if [ -d ~/NadlanBot/data ]; then
         mkdir -p ~/backups/data
-        cp -r ~/NadlanBot/data/* ~/backups/data/
+        cp -r ~/NadlanBot/data/* ~/backups/data/ || true
     fi
     
-    # Remove redundant large files
+    # Remove redundant large files - add sudo for permission issues
     echo "Removing redundant large files..."
-    rm -f ~/nadlan-bot.tar || true
-    rm -f ~/NadlanBot/nadlan-bot.tar || true
-    rm -f ~/NadlanBot/ec2-13-37-217-122.eu-west-3.compute.amazonaws.com || true
+    sudo rm -f ~/nadlan-bot.tar || true
+    sudo rm -f ~/NadlanBot/nadlan-bot.tar || true
+    sudo rm -f ~/NadlanBot/ec2-13-37-217-122.eu-west-3.compute.amazonaws.com || true
     
-    # Clean up docker image tarballs
-    rm -f ~/*.tar || true
+    # Clean up docker image tarballs - add sudo for permission issues
+    sudo rm -f ~/*.tar || true
     
     # Create logs directory for persistent logging
     mkdir -p ~/logs
@@ -151,24 +154,42 @@ EOF
 echo "Step 3: Updating environment file..."
 scp -i "$SSH_KEY" .env "$SSH_USER@$SSH_HOST":~/NadlanBot/.env
 
-# Step 4: Deploy on the server using GitHub repository
-echo "Step 4: Deploying to AWS using GitHub repository..."
+# Upload credentials files if they exist locally
+echo "Step 4: Uploading credential files..."
+if [ -f "token.json" ]; then
+    scp -i "$SSH_KEY" token.json "$SSH_USER@$SSH_HOST":~/NadlanBot/token.json
+fi
+
+if [ -f "data/credentials.json" ]; then
+    scp -i "$SSH_KEY" data/credentials.json "$SSH_USER@$SSH_HOST":~/NadlanBot/data/credentials.json
+fi
+
+if [ -f "data/nadlanbot-410712-0929523261c7.json" ]; then
+    scp -i "$SSH_KEY" data/nadlanbot-410712-0929523261c7.json "$SSH_USER@$SSH_HOST":~/NadlanBot/data/nadlanbot-410712-0929523261c7.json
+fi
+
+if [ -f "data/nadlanbot-410712-58847aeaca48.json" ]; then
+    scp -i "$SSH_KEY" data/nadlanbot-410712-58847aeaca48.json "$SSH_USER@$SSH_HOST":~/NadlanBot/data/nadlanbot-410712-58847aeaca48.json
+fi
+
+# Step 5: Deploy on the server using GitHub repository
+echo "Step 5: Deploying to AWS using GitHub repository..."
 ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
     # Navigate to deployment directory
     cd ~/deployment
     
     # Restore important files from backup
     if [ -f ~/backups/.env ]; then
-        cp ~/backups/.env .env
+        cp ~/backups/.env .env || true
     fi
     
     if [ -f ~/backups/token.json ]; then
-        cp ~/backups/token.json token.json
+        cp ~/backups/token.json token.json || true
     fi
     
     if [ -d ~/backups/data ]; then
         mkdir -p data
-        cp -r ~/backups/data/* data/
+        cp -r ~/backups/data/* data/ || true
     fi
 
     # Clean previous deployment if exists
@@ -198,18 +219,18 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
     
     # Copy environment files to the repository
     echo "Setting up environment files..."
-    cp ~/NadlanBot/.env .env
+    cp ~/NadlanBot/.env .env || true
 
     # Ensure data directories are available 
     mkdir -p data/temp_receipts
     
     # If there are credentials or token files, copy them to the repo
     if [ -f ~/NadlanBot/token.json ]; then
-        cp ~/NadlanBot/token.json .
+        cp ~/NadlanBot/token.json . || true
     fi
     
     if [ -d ~/NadlanBot/data ]; then
-        cp -r ~/NadlanBot/data/* data/
+        cp -r ~/NadlanBot/data/* data/ || true
     fi
 
     # Stop and remove any existing container
@@ -286,37 +307,38 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
     mkdir -p ~/temp_preserve
     
     if [ -f ~/NadlanBot/.env ]; then
-        cp ~/NadlanBot/.env ~/temp_preserve/
+        cp ~/NadlanBot/.env ~/temp_preserve/ || true
     fi
     
     if [ -f ~/NadlanBot/token.json ]; then
-        cp ~/NadlanBot/token.json ~/temp_preserve/
+        cp ~/NadlanBot/token.json ~/temp_preserve/ || true
     fi
     
     if [ -d ~/NadlanBot/data ]; then
         mkdir -p ~/temp_preserve/data
-        cp -r ~/NadlanBot/data/* ~/temp_preserve/data/
+        cp -r ~/NadlanBot/data/* ~/temp_preserve/data/ || true
     fi
     
     # Remove the entire NadlanBot directory and recreate with only important files
-    rm -rf ~/NadlanBot
+    # Added sudo to fix permission issues
+    sudo rm -rf ~/NadlanBot || true
     mkdir -p ~/NadlanBot/data/temp_receipts
     
     # Restore important files
     if [ -f ~/temp_preserve/.env ]; then
-        cp ~/temp_preserve/.env ~/NadlanBot/
+        cp ~/temp_preserve/.env ~/NadlanBot/ || true
     fi
     
     if [ -f ~/temp_preserve/token.json ]; then
-        cp ~/temp_preserve/token.json ~/NadlanBot/
+        cp ~/temp_preserve/token.json ~/NadlanBot/ || true
     fi
     
     if [ -d ~/temp_preserve/data ]; then
-        cp -r ~/temp_preserve/data/* ~/NadlanBot/data/
+        cp -r ~/temp_preserve/data/* ~/NadlanBot/data/ || true
     fi
     
-    # Clean up temp directory
-    rm -rf ~/temp_preserve
+    # Clean up temp directory with sudo for permission issues
+    sudo rm -rf ~/temp_preserve || true
     
     echo "Container is available at: http://$SSH_HOST:$PORT"
 EOF
@@ -324,5 +346,5 @@ EOF
 echo "Cleanup and redeployment complete!"
 echo "Your application is available at: http://$SSH_HOST:$PORT"
 echo "To view logs on the server run: ssh -i $SSH_KEY $SSH_USER@$SSH_HOST 'docker logs nadlan-bot'"
-echo "To start a local tunnel for webhook testing, run:"
-echo "lt --port 8080 --subdomain curly-laws-smile-just-for-me" 
+# echo "To start a local tunnel for webhook testing, run:"
+# echo "lt --port 8080 --subdomain curly-laws-smile-just-for-me" 
