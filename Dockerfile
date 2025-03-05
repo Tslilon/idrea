@@ -23,9 +23,9 @@ COPY . .
 RUN mkdir -p data/temp_receipts
 
 # Set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
-ENV FLASK_APP run.py
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV FLASK_APP=run.py
 
 # Create a non-root user and switch to it
 RUN useradd -m appuser
