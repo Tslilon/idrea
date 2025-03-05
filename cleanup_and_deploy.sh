@@ -247,6 +247,8 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
     if [ "$ENABLE_LOGGING" = "true" ]; then
         # Create a log file with timestamp
         LOG_FILE=~/logs/nadlan-bot-\$(date +%Y-%m-%d_%H-%M-%S).log
+        touch \$LOG_FILE
+        chmod 666 \$LOG_FILE
         
         docker run -d \
           --name nadlan-bot \
@@ -255,13 +257,13 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
           -v ~/NadlanBot/.env:/app/.env \
           -v ~/NadlanBot/data:/app/data \
           -v ~/NadlanBot/token.json:/app/token.json \
-          -v $LOG_FILE:/app/app.log \
+          -v \$LOG_FILE:/app/app.log \
           --log-driver json-file \
           --log-opt max-size=50m \
           --log-opt max-file=3 \
           nadlan-bot:latest
           
-        echo "Logs will be saved to: $LOG_FILE"
+        echo "Logs will be saved to: \$LOG_FILE"
         echo "You can view logs with: docker logs nadlan-bot"
     else
         docker run -d \
@@ -298,7 +300,7 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
     
     # Remove the entire NadlanBot directory and recreate with only important files
     rm -rf ~/NadlanBot
-    mkdir -p ~/NadlanBot/data
+    mkdir -p ~/NadlanBot/data/temp_receipts
     
     # Restore important files
     if [ -f ~/temp_preserve/.env ]; then
@@ -316,8 +318,7 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
     # Clean up temp directory
     rm -rf ~/temp_preserve
     
-    echo "Container is available at: http://$HOSTNAME:$PORT"
-    echo "Use your EC2 instance public DNS: $SSH_HOST on port $PORT"
+    echo "Container is available at: http://$SSH_HOST:$PORT"
 EOF
 
 echo "Cleanup and redeployment complete!"
