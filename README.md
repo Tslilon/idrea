@@ -197,12 +197,21 @@ For deploying to production, follow these steps:
 
 4. Deploy the new container:
    ```bash
-   ssh <server> "docker run -d -p 8000:8000 -v /path/to/.env:/app/.env -v /path/to/data:/app/data --name nadlanbot <docker image>"
+   ssh <server> "docker run -d -p 8000:8000 \
+       -v /home/ec2-user/deployment/idrea/.env:/app/.env \
+       -v /home/ec2-user/deployment/idrea/data:/app/data \
+       -v /home/ec2-user/deployment/idrea/token.json:/app/token.json \
+       --name nadlanbot <docker image>"
    ```
 
 5. Verify deployment:
    ```bash
    curl -i http://<server-ip>:8000/health
+   ```
+
+6. Alternatively, use the cleanup_and_deploy.sh script:
+   ```bash
+   ./cleanup_and_deploy.sh --host <server-hostname> --key <ssh-key-path>
    ```
 
 ## Testing Endpoints

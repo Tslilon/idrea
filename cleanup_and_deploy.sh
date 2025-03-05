@@ -69,14 +69,14 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Check if hostname is provided
+# Check required parameters
 if [ -z "$SSH_HOST" ]; then
-    echo "Error: SSH hostname is required"
+    echo "Error: SSH host is required."
     show_help
     exit 1
 fi
 
-# Confirm deployment settings
+# Show configuration and confirm
 echo "Cleanup and Deployment Settings:"
 echo "  - SSH Host: $SSH_HOST"
 echo "  - SSH Key: $SSH_KEY"
@@ -85,53 +85,59 @@ echo "  - GitHub Branch: $BRANCH"
 echo "  - Port: $PORT"
 echo "  - Persistent Logging: $ENABLE_LOGGING"
 echo ""
-read -p "Continue with these settings? (y/n): " confirm
-if [[ $confirm != [yY] ]]; then
-    echo "Operation cancelled."
+read -p "Continue with these settings? (y/n): " CONFIRM
+if [ "$CONFIRM" != "y" ]; then
+    echo "Deployment cancelled."
     exit 0
 fi
 
 # Ensure SSH key has correct permissions
 chmod 600 "$SSH_KEY"
 
-# Step 1: SSH into the server and clean up all Docker containers and redundant files
+# Step 1: Clean up the server
 echo "Step 1: Cleaning up the server..."
 ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << 'EOF'
-    # Stop all Docker containers
+    # Stop all running containers
     echo "Stopping all Docker containers..."
-    docker stop $(docker ps -aq) || true
+    CONTAINERS=$(docker ps -q)
+    if [ ! -z "$CONTAINERS" ]; then
+        echo $CONTAINERS
+        docker stop $CONTAINERS
+    fi
     
-    # Remove all Docker containers
+    # Remove all containers
     echo "Removing all Docker containers..."
-    docker rm $(docker ps -aq) || true
+    CONTAINERS=$(docker ps -a -q)
+    if [ ! -z "$CONTAINERS" ]; then
+        echo $CONTAINERS
+        docker rm $CONTAINERS
+    fi
     
     # Clean up unused Docker resources
     echo "Cleaning up unused Docker resources..."
-    docker system prune -af --volumes
+    docker system prune -f
     
-    # Clean up old deployment files but preserve important ones
+    # Backup important files
     echo "Backing up important files..."
-    mkdir -p ~/backups
+    mkdir -p ~/backups/data
     
-    # Save important files before cleanup
-    if [ -f ~/NadlanBot/.env ]; then
-        cp ~/NadlanBot/.env ~/backups/.env || true
+    if [ -f ~/deployment/idrea/.env ]; then
+        cp ~/deployment/idrea/.env ~/backups/.env
     fi
     
-    if [ -f ~/NadlanBot/token.json ]; then
-        cp ~/NadlanBot/token.json ~/backups/token.json || true
+    if [ -f ~/deployment/idrea/token.json ]; then
+        cp ~/deployment/idrea/token.json ~/backups/token.json
     fi
     
-    if [ -d ~/NadlanBot/data ]; then
-        mkdir -p ~/backups/data
-        cp -r ~/NadlanBot/data/* ~/backups/data/ || true
+    if [ -d ~/deployment/idrea/data ]; then
+        cp -r ~/deployment/idrea/data/* ~/backups/data/
     fi
     
     # Remove redundant large files - add sudo for permission issues
     echo "Removing redundant large files..."
     sudo rm -f ~/nadlan-bot.tar || true
-    sudo rm -f ~/NadlanBot/nadlan-bot.tar || true
-    sudo rm -f ~/NadlanBot/ec2-13-37-217-122.eu-west-3.compute.amazonaws.com || true
+    sudo rm -f ~/deployment/idrea/nadlan-bot.tar || true
+    sudo rm -f ~/deployment/idrea/ec2-13-37-217-122.eu-west-3.compute.amazonaws.com || true
     
     # Clean up docker image tarballs - add sudo for permission issues
     sudo rm -f ~/*.tar || true
@@ -145,31 +151,26 @@ EOF
 # Step 2: Make sure critical directories exist on remote server
 echo "Step 2: Setting up required directories..."
 ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << 'EOF'
-    mkdir -p ~/NadlanBot/data/temp_receipts
-    mkdir -p ~/deployment
+    mkdir -p ~/deployment/idrea/data/temp_receipts
     mkdir -p ~/logs
 EOF
 
 # Step 3: Update important configuration files
 echo "Step 3: Updating environment file..."
-scp -i "$SSH_KEY" .env "$SSH_USER@$SSH_HOST":~/NadlanBot/.env
+scp -i "$SSH_KEY" .env "$SSH_USER@$SSH_HOST":~/deployment/idrea/.env
 
 # Upload credentials files if they exist locally
 echo "Step 4: Uploading credential files..."
 if [ -f "token.json" ]; then
-    scp -i "$SSH_KEY" token.json "$SSH_USER@$SSH_HOST":~/NadlanBot/token.json
+    scp -i "$SSH_KEY" token.json "$SSH_USER@$SSH_HOST":~/deployment/idrea/token.json
 fi
 
 if [ -f "data/credentials.json" ]; then
-    scp -i "$SSH_KEY" data/credentials.json "$SSH_USER@$SSH_HOST":~/NadlanBot/data/credentials.json
+    scp -i "$SSH_KEY" data/credentials.json "$SSH_USER@$SSH_HOST":~/deployment/idrea/data/credentials.json
 fi
 
-if [ -f "data/nadlanbot-410712-0929523261c7.json" ]; then
-    scp -i "$SSH_KEY" data/nadlanbot-410712-0929523261c7.json "$SSH_USER@$SSH_HOST":~/NadlanBot/data/nadlanbot-410712-0929523261c7.json
-fi
-
-if [ -f "data/nadlanbot-410712-58847aeaca48.json" ]; then
-    scp -i "$SSH_KEY" data/nadlanbot-410712-58847aeaca48.json "$SSH_USER@$SSH_HOST":~/NadlanBot/data/nadlanbot-410712-58847aeaca48.json
+if [ -f "data/nadlanbot-410712-ad9fec93b0df.json" ]; then
+    scp -i "$SSH_KEY" data/nadlanbot-410712-ad9fec93b0df.json "$SSH_USER@$SSH_HOST":~/deployment/idrea/data/nadlanbot-410712-ad9fec93b0df.json
 fi
 
 # Step 5: Deploy on the server using GitHub repository
@@ -219,18 +220,18 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
     
     # Copy environment files to the repository
     echo "Setting up environment files..."
-    cp ~/NadlanBot/.env .env || true
+    cp ~/deployment/idrea/.env .env || true
 
     # Ensure data directories are available 
     mkdir -p data/temp_receipts
     
     # If there are credentials or token files, copy them to the repo
-    if [ -f ~/NadlanBot/token.json ]; then
-        cp ~/NadlanBot/token.json . || true
+    if [ -f ~/deployment/idrea/token.json ]; then
+        cp ~/deployment/idrea/token.json . || true
     fi
     
-    if [ -d ~/NadlanBot/data ]; then
-        cp -r ~/NadlanBot/data/* data/ || true
+    if [ -d ~/deployment/idrea/data ]; then
+        cp -r ~/deployment/idrea/data/* data/ || true
     fi
 
     # Stop and remove any existing container
@@ -268,6 +269,7 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
     if [ "$ENABLE_LOGGING" = "true" ]; then
         # Create a log file with timestamp
         LOG_FILE=~/logs/nadlan-bot-\$(date +%Y-%m-%d_%H-%M-%S).log
+        mkdir -p ~/logs
         touch \$LOG_FILE
         chmod 666 \$LOG_FILE
         
@@ -275,71 +277,33 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
           --name nadlan-bot \
           --restart unless-stopped \
           -p $PORT:8000 \
-          -v ~/NadlanBot/.env:/app/.env \
-          -v ~/NadlanBot/data:/app/data \
-          -v ~/NadlanBot/token.json:/app/token.json \
-          -v \$LOG_FILE:/app/app.log \
-          --log-driver json-file \
-          --log-opt max-size=50m \
-          --log-opt max-file=3 \
-          nadlan-bot:latest
-          
+          -v ~/deployment/idrea/.env:/app/.env \
+          -v ~/deployment/idrea/data:/app/data \
+          -v ~/deployment/idrea/token.json:/app/token.json \
+          nadlan-bot:latest > \$LOG_FILE 2>&1
+        
         echo "Logs will be saved to: \$LOG_FILE"
         echo "You can view logs with: docker logs nadlan-bot"
     else
+        # Run without persistent logging
         docker run -d \
           --name nadlan-bot \
           --restart unless-stopped \
           -p $PORT:8000 \
-          -v ~/NadlanBot/.env:/app/.env \
-          -v ~/NadlanBot/data:/app/data \
-          -v ~/NadlanBot/token.json:/app/token.json \
+          -v ~/deployment/idrea/.env:/app/.env \
+          -v ~/deployment/idrea/data:/app/data \
+          -v ~/deployment/idrea/token.json:/app/token.json \
           nadlan-bot:latest
     fi
     
-    # Check if container is running
+    # Verify container is running
     docker ps | grep nadlan-bot
     
-    # Clean up any unnecessary files except important ones
-    echo "Cleaning up unnecessary files from ~/NadlanBot..."
+    # Clean up unnecessary files
+    echo "Cleaning up unnecessary files from ~/deployment/idrea..."
+    rm -f nadlan-bot.tar || true
     
-    # Keep track of important files we need to preserve
-    mkdir -p ~/temp_preserve
-    
-    if [ -f ~/NadlanBot/.env ]; then
-        cp ~/NadlanBot/.env ~/temp_preserve/ || true
-    fi
-    
-    if [ -f ~/NadlanBot/token.json ]; then
-        cp ~/NadlanBot/token.json ~/temp_preserve/ || true
-    fi
-    
-    if [ -d ~/NadlanBot/data ]; then
-        mkdir -p ~/temp_preserve/data
-        cp -r ~/NadlanBot/data/* ~/temp_preserve/data/ || true
-    fi
-    
-    # Remove the entire NadlanBot directory and recreate with only important files
-    # Added sudo to fix permission issues
-    sudo rm -rf ~/NadlanBot || true
-    mkdir -p ~/NadlanBot/data/temp_receipts
-    
-    # Restore important files
-    if [ -f ~/temp_preserve/.env ]; then
-        cp ~/temp_preserve/.env ~/NadlanBot/ || true
-    fi
-    
-    if [ -f ~/temp_preserve/token.json ]; then
-        cp ~/temp_preserve/token.json ~/NadlanBot/ || true
-    fi
-    
-    if [ -d ~/temp_preserve/data ]; then
-        cp -r ~/temp_preserve/data/* ~/NadlanBot/data/ || true
-    fi
-    
-    # Clean up temp directory with sudo for permission issues
-    sudo rm -rf ~/temp_preserve || true
-    
+    # Output success message
     echo "Container is available at: http://$SSH_HOST:$PORT"
 EOF
 
