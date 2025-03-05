@@ -1,15 +1,16 @@
 #!/bin/bash
 
 # ------------------------------------------------------------
-# AWS Deployment Script (Docker-only approach)
+# AWS Deployment Script (GitHub-based approach)
 # ------------------------------------------------------------
 
 # Configuration
 SSH_HOST=""                # Your AWS SSH hostname or IP
 SSH_KEY="ssh_key.pem"      # Path to SSH private key
 SSH_USER="ec2-user"        # SSH username (typically ec2-user for Amazon Linux)
-DOCKER_IMAGE="nadlan-bot"  # Docker image name
-TAR_FILE="nadlan-bot.tar"  # Local tar file name
+GITHUB_REPO="https://github.com/Tslilon/idrea.git"  # GitHub repository URL (public)
+BRANCH="main"              # Branch to deploy
+PORT="8000"                # Port to expose the application
 
 # Display help message
 function show_help() {
@@ -19,6 +20,8 @@ function show_help() {
     echo "  -h, --host HOST      Set SSH hostname (required)"
     echo "  -k, --key KEY        Set SSH key file path (default: ssh_key.pem)"
     echo "  -u, --user USER      Set SSH username (default: ec2-user)"
+    echo "  -b, --branch BRANCH  Set Git branch (default: main)"
+    echo "  -p, --port PORT      Set port to expose (default: 8000)"
     echo "  --help               Show this help message"
     echo ""
     echo "Example:"
@@ -38,6 +41,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         -u|--user)
             SSH_USER="$2"
+            shift 2
+            ;;
+        -b|--branch)
+            BRANCH="$2"
+            shift 2
+            ;;
+        -p|--port)
+            PORT="$2"
             shift 2
             ;;
         --help)
@@ -64,6 +75,8 @@ echo "Deployment settings:"
 echo "  - SSH Host: $SSH_HOST"
 echo "  - SSH Key: $SSH_KEY"
 echo "  - SSH User: $SSH_USER"
+echo "  - GitHub Branch: $BRANCH"
+echo "  - Port: $PORT"
 echo ""
 read -p "Continue with these settings? (y/n): " confirm
 if [[ $confirm != [yY] ]]; then
@@ -81,57 +94,94 @@ EOF
 echo "Updating environment file..."
 scp -i "$SSH_KEY" .env "$SSH_USER@$SSH_HOST":~/NadlanBot/.env
 
-# Step 3: Build Docker image locally with all code
-echo "Building Docker image with PDF processing capabilities included..."
-TIMESTAMP=$(date +%s)
-IMAGE_NAME="$DOCKER_IMAGE-$TIMESTAMP"
-docker build -f Dockerfile . -t "$IMAGE_NAME" --platform=linux/amd64
-
-# Get the latest image ID
-IMAGE_ID=$(docker images --format "{{.ID}}" | head -n 1)
-echo "Built image: $IMAGE_ID with tag $IMAGE_NAME"
-
-# Step 4: Save and transfer Docker image
-echo "Saving Docker image to $TAR_FILE..."
-docker save -o "$TAR_FILE" "$IMAGE_NAME"
-
-echo "Transferring Docker image to AWS (this may take a while)..."
-scp -i "$SSH_KEY" "$TAR_FILE" "$SSH_USER@$SSH_HOST":~
-
-# Step 5: Deploy on the server
-echo "Deploying to AWS..."
+# Step 3: Deploy on the server using GitHub repository
+echo "Deploying to AWS using GitHub repository..."
 ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
+    # Create deployment directory if it doesn't exist
+    mkdir -p ~/deployment
+
+    # Navigate to deployment directory
+    cd ~/deployment
+
+    # Clean previous deployment if exists
+    if [ -d "idrea" ]; then
+        echo "Updating existing repository..."
+        cd idrea
+        git fetch --all
+        git reset --hard origin/$BRANCH
+    else
+        echo "Cloning repository..."
+        git clone --branch $BRANCH $GITHUB_REPO idrea
+        
+        # Check if clone was successful
+        if [ ! -d "idrea" ]; then
+            echo "Failed to clone repository. Aborting deployment."
+            exit 1
+        fi
+        
+        cd idrea
+    fi
+
+    # Verify we have necessary files
+    if [ ! -f "Dockerfile" ]; then
+        echo "Dockerfile not found in repository. Aborting deployment."
+        exit 1
+    fi
+    
+    # Copy environment files to the repository
+    echo "Setting up environment files..."
+    cp ~/NadlanBot/.env .env
+
+    # Ensure data directories are available 
+    mkdir -p data/temp_receipts
+    
+    # If there are credentials or token files, copy them to the repo
+    if [ -f ~/NadlanBot/token.json ]; then
+        cp ~/NadlanBot/token.json .
+    fi
+    
+    if [ -d ~/NadlanBot/data ]; then
+        cp -r ~/NadlanBot/data/* data/
+    fi
+
     # Stop and remove any existing container
+    echo "Stopping existing container..."
     docker stop nadlan-bot || true
     docker rm nadlan-bot || true
     
     # Clean up unused Docker resources
     docker system prune -f
     
-    # Load the new image
-    echo "Loading Docker image (this may take a while)..."
-    docker load --input ~/nadlan-bot.tar
+    # Build Docker image on the server
+    echo "Building Docker image on the server..."
+    docker build -t nadlan-bot:latest .
     
-    # Get the loaded image information
-    echo "Verifying loaded image..."
-    LOADED_IMAGE=\$(docker images --format "{{.Repository}}:{{.Tag}}" | head -n 1)
-    echo "Image loaded as: \$LOADED_IMAGE"
+    # Check if port is already in use and find an alternative if needed
+    if netstat -tuln | grep -q ":$PORT "; then
+        echo "Warning: Port $PORT is already in use."
+        echo "Using alternative port: 8001"
+        PORT=8001
+    fi
     
     # Run the new container with volume mounts for important files
-    echo "Starting container..."
+    echo "Starting container on port $PORT..."
     docker run -d \
       --name nadlan-bot \
       --restart unless-stopped \
-      -p 8000:8000 \
+      -p $PORT:8000 \
       -v ~/NadlanBot/.env:/app/.env \
       -v ~/NadlanBot/data:/app/data \
       -v ~/NadlanBot/token.json:/app/token.json \
-      \$LOADED_IMAGE
+      nadlan-bot:latest
     
     # Check if container is running
     docker ps | grep nadlan-bot
+    
+    echo "Container is available at: http://$HOSTNAME:$PORT"
+    echo "Use your EC2 instance public DNS: $SSH_HOST on port $PORT"
 EOF
 
 echo "Deployment complete!"
+echo "Your application is available at: http://$SSH_HOST:$PORT"
 echo "To start localtunnel, run and use it in meta for developers/webhook:"
 echo "lt --port 8080 --subdomain curly-laws-smile-just-for-me" 

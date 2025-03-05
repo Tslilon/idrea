@@ -376,9 +376,9 @@ For production, the webhook URL is:
 
 ## Webhook Configuration for Local Development
 
-When developing locally, you need to ensure that WhatsApp messages can reach your local development server. There are two main approaches:
+When developing locally, you need to ensure that WhatsApp messages can reach your local development server.
 
-### Option 1: Update the webhook URL in Meta Developer Dashboard
+### Update the webhook URL in Meta Developer Dashboard
 
 1. Start your local development server:
    ```
@@ -397,40 +397,3 @@ When developing locally, you need to ensure that WhatsApp messages can reach you
    - Verify Token: Use the value from your `.env` file (default: `1234`)
    - Click "Verify and Save"
 
-4. Verify your webhook is working:
-   ```
-   python verify_webhook.py
-   ```
-
-### Option 2: Use a proxy on your production server
-
-If you prefer to keep the webhook URL in Meta Developer Dashboard unchanged (`https://idrea.diligent-devs.com/webhook`), you can deploy a proxy on your production server:
-
-1. Copy `webhook_proxy.py` to your production server
-2. Set the environment variable `TARGET_WEBHOOK_URL` to your localtunnel URL:
-   ```
-   export TARGET_WEBHOOK_URL="https://your-localtunnel-url.loca.lt/webhook"
-   ```
-3. Run the proxy:
-   ```
-   python webhook_proxy.py
-   ```
-
-This will forward all webhook requests from your production server to your local development server.
-
-### Troubleshooting Webhook Issues
-
-If you're not receiving messages from WhatsApp:
-
-1. Check that your webhook URL is correctly configured in the Meta Developer Dashboard
-2. Verify that your localtunnel is running and accessible
-3. Check the logs for any errors:
-   ```
-   docker-compose logs --follow
-   ```
-4. Test your webhook with the verification script:
-   ```
-   python verify_webhook.py
-   ```
-
-Remember that each time you restart localtunnel, you'll get a new URL, and you'll need to update the webhook URL in the Meta Developer Dashboard or the `TARGET_WEBHOOK_URL` environment variable accordingly.
