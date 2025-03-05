@@ -840,29 +840,30 @@ def load_credentials():
     try:
         SERVICE_ACCOUNT_FILE = os.getenv('GOOGLE_SERVICE_ACCOUNT_FILE')
         if not SERVICE_ACCOUNT_FILE or not os.path.exists(SERVICE_ACCOUNT_FILE):
-            logging.warning(f"Service account file not found at {SERVICE_ACCOUNT_FILE}. Checking fallback locations...")
-            # Try fallback locations
-            fallback_files = [
-                'data/nadlanbot-410712-58847aeaca48.json',  # idrea-607@nadlanbot-410712.iam.gserviceaccount.com
-                'data/nadlanbot-410712-0929523261c7.json'   # list-editor@nadlanbot-410712.iam.gserviceaccount.com
-            ]
-            
-            for file_path in fallback_files:
-                if os.path.exists(file_path):
-                    logging.info(f"Using fallback service account file: {file_path}")
-                    SERVICE_ACCOUNT_FILE = file_path
-                    break
-            
-            if not SERVICE_ACCOUNT_FILE or not os.path.exists(SERVICE_ACCOUNT_FILE):
-                logging.error("No valid service account file found. Authentication will fail.")
-                return None
+            logging.error(f"Service account file not found at {SERVICE_ACCOUNT_FILE}. Authentication will fail.")
+            return None
         
         # Define the scopes required by your application
         SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
 
-        # Authenticate using the service account
-        creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-        return creds
+        # Load the JSON content and create credentials from it
+        try:
+            with open(SERVICE_ACCOUNT_FILE, 'r') as json_file:
+                service_account_info = json.load(json_file)
+            
+            # Create credentials directly from the parsed JSON
+            creds = service_account.Credentials.from_service_account_info(
+                service_account_info,
+                scopes=SCOPES
+            )
+            logging.info(f"Successfully loaded credentials from service account info")
+            return creds
+        except json.JSONDecodeError as json_error:
+            logging.error(f"Invalid JSON in service account file: {str(json_error)}")
+            return None
+        except Exception as load_error:
+            logging.error(f"Failed to create credentials from service account info: {str(load_error)}")
+            return None
     except Exception as e:
         logging.error(f"Error loading service account credentials: {str(e)}")
         return None
@@ -880,17 +881,35 @@ def get_receipt_number(credentials, sheet_id):
         range_to_read = 'iDrea!A2:A'  # Assuming 'A2:A' contains receipt numbers, adjust as needed
 
         # Call the Sheets API to read data
-        result = service.spreadsheets().values().get(
-            spreadsheetId=sheet_id,
-            range=range_to_read).execute()
+        try:
+            result = service.spreadsheets().values().get(
+                spreadsheetId=sheet_id,
+                range=range_to_read).execute()
+                
+            values = result.get('values', [])
 
-        values = result.get('values', [])
+            # Extract receipt numbers and find the max
+            receipt_numbers = [int(row[0]) for row in values if row and row[0].isdigit()]
+            max_receipt_number = max(receipt_numbers, default=0)  # Default to 0 if list is empty
 
-        # Extract receipt numbers and find the max
-        receipt_numbers = [int(row[0]) for row in values if row and row[0].isdigit()]
-        max_receipt_number = max(receipt_numbers, default=0)  # Default to 0 if list is empty
-
-        return max_receipt_number + 1
+            return max_receipt_number + 1
+        except HttpError as api_error:
+            if "invalid_grant" in str(api_error) and "JWT Signature" in str(api_error):
+                logging.error(f"JWT Signature error: {str(api_error)}")
+                # Try to reload credentials
+                logging.info("Attempting to reload credentials and retry...")
+                new_credentials = load_credentials()
+                if new_credentials:
+                    # Recursive call with new credentials - only retry once
+                    logging.info("Retrying with new credentials")
+                    return get_receipt_number(new_credentials, sheet_id)
+                else:
+                    logging.error("Failed to reload credentials")
+                    return None
+            else:
+                # Other API errors
+                logging.error(f"Google API error getting receipt number: {str(api_error)}")
+                return None
     except Exception as e:
         logging.error(f"Error getting receipt number: {str(e)}")
         return None

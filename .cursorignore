@@ -1,5 +1,4 @@
 # Follow same pattern as .gitignore
-.env
 *.pem
 token.json
 credentials.json
