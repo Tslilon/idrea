@@ -68,7 +68,7 @@ RECEIPT_SCHEMA = {
     "properties": {
         "what": {
             "type": "string",
-            "description": "Description of the purchase or product (what was bought)"
+            "description": "Description of the purchase or product (what was bought) in English"
         },
         "store_name": {
             "type": "string",
@@ -76,11 +76,11 @@ RECEIPT_SCHEMA = {
         },
         "total_amount": {
             "type": "string",
-            "description": "The total amount paid, including currency symbol if available"
+            "description": "The total amount paid"
         },
         "iva": {
             "type": "string",
-            "description": "The VAT/IVA tax amount, including currency symbol if available"
+            "description": "The VAT/IVA tax amount"
         }
     },
     "required": ["what", "store_name", "total_amount"]

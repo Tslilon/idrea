@@ -506,7 +506,7 @@ def process_text_message(text, name, creds, sender_waid):
             current_receipt = get_stored_receipt(sender_waid)
             for field, value in updates.items():
                 current_receipt[field] = value
-            store_extracted_receipt(sender_waid, current_receipt)
+            store_extracted_receipt(sender_waid, current_receipt, name)
             
             # Format the updated receipt details
             updated_message = format_extracted_details_for_whatsapp(current_receipt)
@@ -1205,7 +1205,7 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
                 
                 # Process the image for receipt extraction
                 try:
-                    # First, upload the image to Google Drive
+                    # First, get a single receipt number to use for both the file and the receipt
                     receipt_number = get_receipt_number(creds, os.getenv("GOOGLE_SHEET_ID"))
                     filename = f"{receipt_number}{extension}"
                     
@@ -1245,9 +1245,6 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
                     
                     # Format the extracted details for WhatsApp
                     formatted_message = format_extracted_details_for_whatsapp(receipt_details)
-                    
-                    # Get a new receipt number
-                    receipt_number = get_receipt_number(creds, os.getenv("GOOGLE_SHEET_ID"))
                     
                     # Store the extracted receipt details for this user
                     store_extracted_receipt(sender_waid, receipt_details, name)
@@ -1405,7 +1402,7 @@ def process_document_message(message, name, creds, sender_waid, folder_id):
                 
                 # Process the document for receipt extraction
                 try:
-                    # First, upload the document to Google Drive
+                    # First, get a single receipt number to use for both the file and the receipt
                     receipt_number = get_receipt_number(creds, os.getenv("GOOGLE_SHEET_ID"))
                     drive_filename = f"{receipt_number}{file_extension}"
                     
