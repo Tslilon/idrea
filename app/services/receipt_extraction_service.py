@@ -83,22 +83,21 @@ RECEIPT_SCHEMA = {
             "description": "The VAT/IVA tax amount"
         }
     },
-    "required": ["what", "store_name", "total_amount"]
+    "required": ["what", "store_name", "total_amount", "iva"]
 }
 
 # Updated prompt to extract the "what" field as well
 EXTRACTION_PROMPT = """
 Analyze this receipt image and extract the following key information:
-1. What: Brief description of the purchase (what was bought - items or services)
+1. What: Brief description of the purchase (what was bought - items or services, etc., and translate English if suitable and not an explicit product name)
 2. Store name: The business name that issued the receipt
 3. Total amount: The total amount paid (including any taxes)
 4. IVA/VAT amount: The Spanish VAT tax amount (if shown on receipt)
 
 Important guidelines:
 - If a field isn't visible or doesn't exist, leave it empty
-- Maintain original formatting (currency symbols, etc.)
-- For amounts, extract exactly as shown on the receipt (with currency symbols if present)
-- Respond ONLY with the JSON data according to the schema - no other text
+- Maintain original formatting
+- For amounts, extract exactly as shown on the receipt (no need for the currency symbol)
 
 When extracting the "what" field:
 - Provide a brief description of what was purchased
@@ -109,18 +108,8 @@ When extracting the store name:
 - Use the most prominent business name on the receipt
 - Don't include slogans or addresses
 
-When extracting amounts:
-- Preserve the exact format shown on receipt
-- Include currency symbols if present
+When extracting amounts
 - If multiple totals exist, choose the final/largest one
-
-IMPORTANT: Return your response as a JSON object with EXACTLY these field names:
-{
-  "what": "Description of purchase",
-  "store_name": "Name of the store",
-  "total_amount": "Total amount with currency",
-  "iva": "VAT amount if available"
-}
 
 Be precise and accurate in your extraction.
 """
@@ -393,13 +382,13 @@ def extract_from_image(base64_image):
     try:
         client = get_openai_client()
         
-        # Create the request to the OpenAI API with the image
+        # Create the request to the OpenAI API with the image and structured output
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
             max_tokens=OPENAI_MAX_TOKENS,
             temperature=OPENAI_TEMPERATURE,
             messages=[
-                {"role": "system", "content": EXTRACTION_PROMPT},
+                {"role": "system", "content": "Extract receipt details and return as JSON."},
                 {
                     "role": "user", 
                     "content": [
@@ -413,7 +402,36 @@ def extract_from_image(base64_image):
                     ]
                 }
             ],
-            response_format={"type": "json_object"}
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "ReceiptDetails",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "what": {
+                                "type": "string",
+                                "description": "Description of the purchase or product (what was bought) translated to English if appropriate"
+                            },
+                            "store_name": {
+                                "type": "string",
+                                "description": "The name of the store or vendor as shown on the receipt"
+                            },
+                            "total_amount": {
+                                "type": "string",
+                                "description": "The total amount paid"
+                            },
+                            "iva": {
+                                "type": "string",
+                                "description": "The VAT/IVA tax amount"
+                            }
+                        },
+                        "required": ["what", "store_name", "total_amount", "iva"],
+                        "additionalProperties": False
+                    }
+                }
+            }
         )
         
         # Extract and parse the JSON from the API response
@@ -429,47 +447,9 @@ def extract_from_image(base64_image):
             # Log the parsed JSON for debugging
             logging.info(f"Complete parsed JSON from OpenAI: {json.dumps(result_json, indent=2, ensure_ascii=False)}")
             
-            # Normalize field names - convert from OpenAI format to our expected schema
-            normalized_json = {}
+            # Return the validated JSON (schema is enforced by the API)
+            return result_json, None
             
-            # Map of OpenAI's field names to our expected schema names
-            field_map = {
-                "What": "what",
-                "what": "what",
-                "Store name": "store_name", 
-                "store_name": "store_name",
-                "Total amount": "total_amount",
-                "total_amount": "total_amount",
-                "IVA/VAT amount": "iva",
-                "iva": "iva",
-                "IVA": "iva"
-            }
-            
-            # Convert fields using the map
-            for key, value in result_json.items():
-                normalized_key = field_map.get(key)
-                if normalized_key:
-                    normalized_json[normalized_key] = value
-                else:
-                    # Keep any other fields as-is
-                    normalized_json[key.lower().replace(" ", "_")] = value
-            
-            logging.info(f"Normalized JSON fields: {', '.join(normalized_json.keys())}")
-            
-            # Validate the JSON against our schema
-            for field in ["what", "store_name", "total_amount"]:
-                if field not in normalized_json:
-                    logging.warning(f"Missing required field after normalization: {field}")
-                    # Add default values for missing fields
-                    if field == "what":
-                        normalized_json[field] = "Purchase"
-                    elif field == "store_name":
-                        normalized_json[field] = "Unknown Store"
-                    elif field == "total_amount":
-                        normalized_json[field] = "0"
-            
-            # Return the normalized JSON
-            return normalized_json, None
         except json.JSONDecodeError:
             logging.error(f"Failed to parse JSON response: {result_text}")
             return None, "Invalid JSON response from OpenAI"

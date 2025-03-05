@@ -192,7 +192,7 @@ For deploying to production, follow these steps:
 
 3. Stop any existing containers:
    ```bash
-   ssh <server> "docker stop nadlanbot && docker rm nadlanbot"
+   ssh <server> "docker stop nadlan-bot && docker rm nadlan-bot"
    ```
 
 4. Deploy the new container:
@@ -201,7 +201,7 @@ For deploying to production, follow these steps:
        -v /home/ec2-user/deployment/idrea/.env:/app/.env \
        -v /home/ec2-user/deployment/idrea/data:/app/data \
        -v /home/ec2-user/deployment/idrea/token.json:/app/token.json \
-       --name nadlanbot <docker image>"
+       --name nadlan-bot <docker image>"
    ```
 
 5. Verify deployment:
@@ -213,6 +213,63 @@ For deploying to production, follow these steps:
    ```bash
    ./cleanup_and_deploy.sh --host <server-hostname> --key <ssh-key-path>
    ```
+
+### Server Directory Structure
+
+The EC2 server uses the following directory structure for the application:
+
+```
+/home/ec2-user/
+├── deployment/                # Main deployment directory
+│   ├── idrea/                 # Application code and configuration
+│   │   ├── .env               # Environment variables
+│   │   ├── data/              # Data directory containing:
+│   │   │   ├── credentials.json               # Google API credentials
+│   │   │   ├── nadlanbot-410712-ad9fec93b0df.json  # Service account key
+│   │   │   └── temp_receipts/                # Temporary storage for receipts
+│   │   └── token.json         # OAuth token for Google API
+└── NadlanBot/                 # Legacy directory (do not use for new deployments)
+```
+
+**IMPORTANT NOTES**:
+1. **Use the correct directory**: All new deployments should use `/home/ec2-user/deployment/idrea/` as the base directory.
+2. **Container name**: The Docker container should be named `nadlan-bot` (with a hyphen).
+3. **Volume mounts**: Always ensure the Docker container has these three volume mounts:
+   - `.env` file
+   - `data` directory
+   - `token.json` file
+
+### Troubleshooting Deployment
+
+1. **Container won't start**: Check logs with `docker logs nadlan-bot`
+2. **Missing data directory**: The `data` directory must exist and contain:
+   - `credentials.json`
+   - `nadlanbot-410712-ad9fec93b0df.json` (service account key)
+   - `temp_receipts` subdirectory
+3. **Permission issues**: Ensure files have proper permissions:
+   ```bash
+   ssh <server> "chmod 644 /home/ec2-user/deployment/idrea/.env"
+   ssh <server> "chmod 644 /home/ec2-user/deployment/idrea/token.json"
+   ssh <server> "chmod -R 755 /home/ec2-user/deployment/idrea/data"
+   ```
+
+### Viewing Server Logs
+
+To monitor the application logs on the server:
+
+```bash
+# View all logs
+ssh -i ssh_key.pem ec2-user@<server-hostname> "docker logs nadlan-bot"
+
+# View most recent logs (last 50 lines)
+ssh -i ssh_key.pem ec2-user@<server-hostname> "docker logs nadlan-bot --tail 50"
+
+# Follow logs in real-time (press Ctrl+C to exit)
+ssh -i ssh_key.pem ec2-user@<server-hostname> "docker logs nadlan-bot --follow"
+
+# Filter logs for errors
+ssh -i ssh_key.pem ec2-user@<server-hostname> "docker logs nadlan-bot | grep -i error"
+```
 
 ## Testing Endpoints
 

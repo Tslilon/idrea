@@ -3,6 +3,20 @@
 # ------------------------------------------------------------
 # Server Cleanup and Redeployment Script
 # ------------------------------------------------------------
+# This script deploys the application to the EC2 server using the following structure:
+# 
+# Directory Structure on Server:
+# /home/ec2-user/
+# ├── deployment/                # Main deployment directory
+# │   ├── idrea/                 # Application code and configuration
+# │   │   ├── .env               # Environment variables
+# │   │   ├── data/              # Data directory containing credentials & receipts
+# │   │   └── token.json         # OAuth token for Google API
+# └── backups/                   # Backup directory for important files
+#
+# IMPORTANT: All deployments use the /home/ec2-user/deployment/idrea/ directory.
+# Do NOT use the legacy ~/NadlanBot directory for new deployments.
+# ------------------------------------------------------------
 
 # Configuration
 SSH_HOST=""                # Your AWS SSH hostname or IP
@@ -121,6 +135,9 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << 'EOF'
     echo "Backing up important files..."
     mkdir -p ~/backups/data
     
+    # The following section backs up files from the deployment directory
+    # IMPORTANT: All files are stored in /home/ec2-user/deployment/idrea/
+    # This is the correct path for all deployments
     if [ -f ~/deployment/idrea/.env ]; then
         cp ~/deployment/idrea/.env ~/backups/.env
     fi
