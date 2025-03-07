@@ -151,6 +151,14 @@ curl -i http://localhost:8000/health
 
 To build and run the application locally:
 
+tldr:
+```bash
+docker-compose build server && docker-compose up -d server
+docker-compose logs --follow server
+lt --port 8080 --subdomain curly-laws-smile-just-for-me
+```
+
+or:
 ```bash
 # Build the Docker image
 docker build -t nadlanbot-local .

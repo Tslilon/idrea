@@ -1103,6 +1103,14 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
         
         logging.info(f"Processing image with ID: {image_id}, Caption: {caption}")
         
+        # For images, we need to check differently since filename isn't directly available
+        # If caption looks like a filename with common image extensions, treat as no caption
+        if caption and (caption.lower().endswith('.jpg') or caption.lower().endswith('.jpeg') 
+                      or caption.lower().endswith('.png') or caption.lower().endswith('.gif') 
+                      or caption.lower().endswith('.webp')):
+            logging.info(f"Caption appears to be a filename ({caption}). Treating as no caption.")
+            caption = ""
+        
         # Get the image URL from WhatsApp
         image_url = get_image_url_from_whatsapp(image_id)
         
@@ -1310,6 +1318,11 @@ def process_document_message(message, name, creds, sender_waid, folder_id):
         mime_type = message["document"].get("mime_type", "application/pdf")
         
         logging.info(f"Processing document with ID: {document_id}, Caption: {caption}, Filename: {filename}, MIME type: {mime_type}")
+        
+        # Check if caption equals filename - treat as no caption if they match
+        if caption == filename:
+            logging.info(f"Caption matches filename exactly ({caption}). Treating as no caption.")
+            caption = ""
         
         # Get the document URL from WhatsApp
         document_url = get_document_url_from_whatsapp(document_id)
