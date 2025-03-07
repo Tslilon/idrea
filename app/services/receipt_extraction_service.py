@@ -7,6 +7,8 @@ import os
 import tempfile
 from typing import Dict, Optional, List, Any, Tuple
 from io import BytesIO
+import re
+from datetime import datetime, timedelta
 
 # Clear any proxy environment variables that might be causing issues
 os.environ.pop("HTTP_PROXY", None)
@@ -81,18 +83,22 @@ RECEIPT_SCHEMA = {
         "iva": {
             "type": "string",
             "description": "The VAT/IVA tax amount"
+        },
+        "date": {
+            "type": "string",
+            "description": "The date of the transaction in DD/MM/YYYY format if available"
         }
     },
-    "required": ["what", "store_name", "total_amount", "iva"]
+    "required": ["what", "store_name", "total_amount", "iva", "date"]
 }
 
-# Updated prompt to extract the "what" field as well
 EXTRACTION_PROMPT = """
 Analyze this receipt image and extract the following key information:
-1. What: Brief description of the purchase (what was bought - items or services, etc., and translate English if suitable and not an explicit product name)
+1. What: Brief up to 5 words description of the purchase (what was bought - items or services, etc., and translate English if suitable and not an explicit product name)
 2. Store name: The business name that issued the receipt
 3. Total amount: The total amount paid (including any taxes)
 4. IVA/VAT amount: The Spanish VAT tax amount (if shown on receipt)
+5. Date: The date of the transaction (if shown on receipt)
 
 Important guidelines:
 - If a field isn't visible or doesn't exist, leave it empty
@@ -108,8 +114,13 @@ When extracting the store name:
 - Use the most prominent business name on the receipt
 - Don't include slogans or addresses
 
-When extracting amounts
+When extracting amounts:
 - If multiple totals exist, choose the final/largest one
+
+When extracting the date:
+- Use the format DD/MM/YYYY if possible
+- If multiple dates are shown, choose the transaction/purchase date
+- If no date is visible, leave this field empty
 
 Be precise and accurate in your extraction.
 """
@@ -269,6 +280,15 @@ def format_extracted_details_for_whatsapp(details):
     else:
         message.append("IVA (euros): ")
     
+    # Date (When)
+    date = details.get("date", "")
+    if not date and "when" in details:
+        date = details.get("when", "")
+    if date:
+        message.append(f"When: {date}")
+    else:
+        message.append("When: (empty - current date will be used)")
+    
     # Store name
     store_name = details.get("store_name", "")
     message.append(f"Store name: {store_name}")
@@ -306,68 +326,104 @@ def prepare_for_google_sheets(details):
     # Extract the sender's name from the details
     sender_name = details.get("sender_name", "")
     
-    # The order of fields in Google Sheets
-    fields_order = ["what", "amount", "iva", "receipt", "store_name", "payment_method", "charge_to", "comments"]
+    # Process the date (from "date" or "when" field)
+    date_value = None
+    if "date" in details and details["date"]:
+        date_value = details["date"]
+    elif "when" in details and details["when"]:
+        date_value = details["when"]
+        
+    # Format the date for Google Sheets
+    formatted_date = ""
+    if date_value:
+        try:
+            # Skip instruction text
+            if date_value.startswith("(can be empty"):
+                logging.info(f"Instruction text detected in date: '{date_value}'. Will use current date.")
+                formatted_date = datetime.now().strftime('%Y-%m-%d %H:%M')
+            # If it's in DD/MM/YYYY format, parse and convert to YYYY-MM-DD HH:MM
+            elif re.match(r'\d{2}/\d{2}/\d{4}', date_value):
+                try:
+                    # Verify it's a valid date
+                    parsed_date = datetime.strptime(date_value, "%d/%m/%Y")
+                    # Check if the day matches (to catch invalid dates like 31/04/2024)
+                    original_day = int(date_value.split('/')[0])
+                    if original_day == parsed_date.day:
+                        # Format as YYYY-MM-DD 12:00 (noon)
+                        formatted_date = parsed_date.strftime('%Y-%m-%d 12:00')
+                        logging.info(f"Formatted date '{date_value}' to: {formatted_date}")
+                    else:
+                        logging.warning(f"Invalid date detected: {date_value} - day doesn't match after parsing")
+                        formatted_date = datetime.now().strftime('%Y-%m-%d %H:%M')
+                except ValueError:
+                    logging.warning(f"Date appears to be in right format but is invalid: {date_value}")
+                    formatted_date = datetime.now().strftime('%Y-%m-%d %H:%M')
+            else:
+                # Try other date formats
+                date_formats = [
+                    "%d/%m/%Y",  # 31/12/2023
+                    "%d-%m-%Y",  # 31-12-2023
+                    "%d.%m.%Y",  # 31.12.2023
+                    "%Y-%m-%d",  # 2023-12-31 (ISO format)
+                    "%Y/%m/%d",  # 2023/12/31
+                ]
+                
+                parsed_date = None
+                for fmt in date_formats:
+                    try:
+                        parsed_date = datetime.strptime(date_value, fmt)
+                        # Check if the day matches (for formats with day first)
+                        if fmt.startswith("%d"):
+                            original_day = date_value.split(fmt[2])[0]
+                            if original_day.isdigit() and int(original_day) != parsed_date.day:
+                                logging.warning(f"Invalid date detected: {date_value} - day doesn't match after parsing")
+                                parsed_date = None
+                                continue
+                        break
+                    except ValueError:
+                        continue
+                
+                if parsed_date:
+                    # Format as YYYY-MM-DD 12:00 (noon)
+                    formatted_date = parsed_date.strftime('%Y-%m-%d 12:00')
+                    logging.info(f"Parsed and formatted date '{date_value}' to: {formatted_date}")
+                else:
+                    # Special keywords
+                    if date_value.lower() == "today":
+                        formatted_date = datetime.now().strftime('%Y-%m-%d 12:00')
+                    elif date_value.lower() == "yesterday":
+                        formatted_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d 12:00')
+                    else:
+                        # If we can't parse it, use current date/time
+                        logging.warning(f"Could not parse date: {date_value}. Using current date.")
+                        formatted_date = datetime.now().strftime('%Y-%m-%d %H:%M')
+        except Exception as e:
+            logging.warning(f"Error formatting date: {e}. Using current date.")
+            formatted_date = datetime.now().strftime('%Y-%m-%d %H:%M')
+    else:
+        # No date provided, use current date/time
+        formatted_date = datetime.now().strftime('%Y-%m-%d %H:%M')
     
-    # Initialize an empty list with the correct length
-    values = [""] * len(fields_order)
-    
-    # Map the extracted details to the corresponding fields
-    if details:
-        # Map what field (index 0)
-        if "what" in details and details["what"]:
-            values[0] = details["what"]
-        
-        # Map amount field (index 1)
-        # First check for total_amount (from OpenAI extraction) and then amount (from manual entry)
-        amount_value = None
-        if "total_amount" in details and details["total_amount"]:
-            amount_value = details["total_amount"]
-            logging.info(f"Found total_amount field: {amount_value}")
-        elif "amount" in details and details["amount"]:
-            amount_value = details["amount"]
-            logging.info(f"Found amount field: {amount_value}")
-            
-        if amount_value is not None:
-            # Simply pass the amount value as is - no complex formatting
-            # Remove any currency symbols but keep the decimal as is
-            amount_str = str(amount_value).replace('€', '').strip()
-            logging.info(f"Prepared amount for Google Sheets (simple): {amount_str}")
-            values[1] = amount_str
-        else:
-            logging.warning("No amount or total_amount field found in receipt details")
-        
-        # Map IVA field (index 2)
-        if "iva" in details and details["iva"]:
-            # Simply pass the IVA value as is - no complex formatting
-            iva_str = str(details["iva"]).replace('€', '').strip()
-            logging.info(f"Prepared IVA for Google Sheets (simple): {iva_str}")
-            values[2] = iva_str
-        
-        # Always set receipt to yes (index 3)
-        values[3] = "yes"
-        
-        # Map store name field (index 4)
-        if "store_name" in details and details["store_name"]:
-            values[4] = details["store_name"]
-        
-        # Map payment method field (index 5) if available
-        if "payment_method" in details and details["payment_method"]:
-            values[5] = details["payment_method"]
-        
-        # Map charge_to field (index 6) if available
-        if "charge_to" in details and details["charge_to"]:
-            values[6] = details["charge_to"]
-        
-        # Map comments field (index 7) if available
-        if "comments" in details and details["comments"]:
-            values[7] = details["comments"]
+    # Create values array in EXACTLY the order expected by the spreadsheet
+    # [when, who, what, amount, IVA, receipt, store name, payment method, charge to, comments]
+    # Number is added by append_to_sheet
+    final_values = [
+        formatted_date,                                # when
+        sender_name,                                   # who
+        details.get("what", ""),                       # what
+        details.get("total_amount", details.get("amount", "")),  # amount
+        details.get("iva", ""),                        # IVA
+        details.get("has_receipt", "yes"),             # receipt (use user value or default to yes)
+        details.get("store_name", ""),                 # store name
+        details.get("payment_method", ""),             # payment method
+        details.get("charge_to", ""),                  # charge to
+        details.get("comments", "")                    # comments
+    ]
     
     # Log the values being returned for debugging
-    logging.info(f"Prepared values for Google Sheets: {values}")
+    logging.info(f"Prepared values for Google Sheets: {final_values}")
     
-    # Return with sender_name as the first element
-    return [sender_name] + values
+    return final_values
 
 def extract_from_image(base64_image):
     """
@@ -425,9 +481,13 @@ def extract_from_image(base64_image):
                             "iva": {
                                 "type": "string",
                                 "description": "The VAT/IVA tax amount"
+                            },
+                            "date": {
+                                "type": "string",
+                                "description": "The date of the transaction in DD/MM/YYYY format if available"
                             }
                         },
-                        "required": ["what", "store_name", "total_amount", "iva"],
+                        "required": ["what", "store_name", "total_amount", "iva", "date"],
                         "additionalProperties": False
                     }
                 }

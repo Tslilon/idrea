@@ -381,13 +381,12 @@ def process_text_message(text, name, creds, sender_waid):
             # User is confirming extracted receipt details
             logging.info("User confirming receipt details")
             
-            # Get the receipt number that was created earlier
-            # Prepare the data from previously extracted receipt
-            update_data = [stored_receipt.get("sender_name", name)]  # Use stored name or fallback to current name
-            
-            fields_to_process = ["what", "amount", "iva", "receipt", "store_name", "payment_method", "charge_to", "comments"]
-            for field in fields_to_process:
-                update_data.append(stored_receipt.get(field, ""))
+            # Make sure sender_name is included
+            if "sender_name" not in stored_receipt:
+                stored_receipt["sender_name"] = name
+                
+            # Use prepare_for_google_sheets to get the values in the correct order
+            update_data = prepare_for_google_sheets(stored_receipt)
             
             # Remove the stored receipt
             delete_stored_receipt(sender_waid)
@@ -402,104 +401,157 @@ def process_text_message(text, name, creds, sender_waid):
             send_message(data)
             
             # Update admins
-            admin_message = f"{name} confirmed receipt details. Receipt {receipt_num} added to spreadsheet."
-            update_admins(admin_message, sender_waid)
+            update_admins(f"Receipt #{receipt_num} confirmed by {name}", sender_waid)
             
             return
         else:
-            # No stored receipt details for this user
-            first_name = get_first_name(name)
-            data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I don't have any pending receipt details to confirm. You can send a new receipt image or enter details manually.")
+            # No stored receipt to confirm
+            response = "I don't have any pending receipt details to confirm. Please provide receipt details first."
+            data = get_text_message_input(sender_waid, response)
             send_message(data)
             return
     
-    # Handle cancellation responses
-    elif text_lower in ["cancel", "no"]:
-        if stored_receipt:
-            # User wants to cancel the receipt
-            logging.info("User cancelling receipt")
-            
-            # Check if there's a drive link to delete
-            drive_link = stored_receipt.get("drive_link", "")
-            if drive_link:
-                # Extract file ID from drive link
-                # Drive links are in the format: https://drive.google.com/file/d/FILE_ID/view
-                try:
-                    file_id = drive_link.split("/d/")[1].split("/")[0]
-                    delete_result = delete_file_from_drive(creds, file_id)
-                    if delete_result:
-                        logging.info(f"Deleted receipt file {file_id} from Drive during cancellation")
-                    else:
-                        logging.warning(f"Failed to delete receipt file {file_id} from Drive during cancellation")
-                except Exception as e:
-                    logging.error(f"Error extracting file ID from drive link: {str(e)}")
-            
-            # Remove the stored receipt
-            delete_stored_receipt(sender_waid)
-            
-            # Send confirmation of cancellation
-            first_name = get_first_name(name)
-            cancel_message = f"Okay {first_name}, I've cancelled this receipt. All information and uploaded files have been deleted."
-            data = get_text_message_input(sender_waid, cancel_message)
-            send_message(data)
-            
-            # Update admins
-            admin_message = f"{name} cancelled their receipt submission."
-            if drive_link:
-                admin_message += " The uploaded file was deleted from Drive."
-            update_admins(admin_message, sender_waid)
-            
-            return
-        else:
-            # No stored receipt details for this user
-            first_name = get_first_name(name)
-            data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I don't have any pending receipt details to cancel. You can send a new receipt image or enter details manually.")
-            send_message(data)
-            return
+    # Handling receipt image caption requests
+    if text.isdigit():
+        response = f"Looking for receipt #{text}..."
+        data = get_text_message_input(sender_waid, response)
+        send_message(data)
+        # Further handling would be done elsewhere
+        return
     
-    # Handle field updates for an existing receipt
-    elif stored_receipt and not (text_lower in ["confirm", "yes", "cancel", "no"]):
-        # User is providing updates to receipt fields
-        logging.info("User providing receipt detail updates")
+    # Check if this is an edit request for an existing stored receipt
+    if stored_receipt and not ":" in text:
+        # Simple text without field markers - might be an update attempt
+        response = "If you want to update a specific field, please use the format 'Field: New Value', for example 'Amount: 42.50'"
+        data = get_text_message_input(sender_waid, response)
+        send_message(data)
+        return
         
-        # Check for field patterns like "Field: value"
+    # If we have stored data and this looks like a field update
+    if stored_receipt and ":" in text:
+        # This might be an update to a specific field
+        text_parts = text.split("\n")
         updates = {}
-        lines = text.split('\n')
         
-        for line in lines:
-            # Look for field: value patterns
-            match = re.match(r'(.*?):\s*(.*)', line.strip())
-            if match:
-                field_name = match.group(1).strip().lower()
-                field_value = match.group(2).strip()
+        for line in text_parts:
+            if ":" in line:
+                # Split at the first colon
+                colon_index = line.find(":")
+                field_name = line[:colon_index].strip().lower()
+                field_value = line[colon_index+1:].strip()
                 
-                # Map user-friendly field names to internal names
-                field_mapping = {
-                    "what": "what",
-                    "amount": "amount",
-                    "iva": "iva",
-                    "store name": "store_name",
-                    "payment method": "payment_method",
-                    "charge to": "charge_to", 
-                    "comments": "comments"
-                }
+                # Use our field normalization rules to get consistent field names
+                normalized_field = None
+                if "amount" in field_name:
+                    normalized_field = "total_amount"
+                elif "iva" in field_name:
+                    normalized_field = "iva"
+                elif "receipt" in field_name:
+                    normalized_field = "has_receipt"
+                elif "store" in field_name:
+                    normalized_field = "store_name"
+                elif "payment" in field_name:
+                    normalized_field = "payment_method"
+                elif "charge" in field_name:
+                    normalized_field = "charge_to"
+                elif "comments" in field_name or "notes" in field_name:
+                    normalized_field = "comments"
+                elif "what" in field_name or "description" in field_name:
+                    normalized_field = "what"
+                elif "when" in field_name or "date" in field_name:
+                    normalized_field = "when"
                 
-                if field_name in field_mapping:
-                    normalized_field = field_mapping[field_name]
+                if normalized_field:
+                    # Process special fields
+                    # Process amount and IVA
+                    if normalized_field in ["total_amount", "iva"]:
+                        if field_value:
+                            try:
+                                # Try to clean up the value to be a valid number
+                                # Remove any currency symbols
+                                field_value = re.sub(r'[^\d.,\-]', '', field_value)
+                                
+                                # If value starts with a comma or period, add a 0 before it
+                                if field_value.startswith('.') or field_value.startswith(','):
+                                    field_value = '0' + field_value
+                                    
+                                # If value ends with a comma or period, remove it
+                                if field_value.endswith('.') or field_value.endswith(','):
+                                    field_value = field_value[:-1]
+                                    
+                                # Don't convert format here, just clean up
+                                # The actual conversion to European format happens in append_to_sheet
+                            except:
+                                # If not a valid number, keep as is but log
+                                logging.warning(f"Invalid number format for {field_name}: {field_value}")
                     
-                    # Format amount and IVA fields to ensure proper number formatting
-                    if field_name in ["amount", "iva"]:
-                        try:
-                            # Try to parse as number and format
-                            clean_value = field_value.replace('€', '').replace(',', '.').strip()
-                            value_float = float(clean_value)
-                            field_value = f"{value_float:.2f} €"
-                        except ValueError:
-                            # If not a valid number, keep as is but log
-                            logging.warning(f"Invalid number format for {field_name}: {field_value}")
+                    # Process date formats for "when"/"date" field
+                    elif field_name in ["when", "date"]:
+                        # If the value is the instruction text or empty, skip it
+                        if not field_value or field_value.startswith("(can be empty"):
+                            logging.info(f"Empty or instruction text detected in date field: '{field_value}'. Using current date.")
+                            field_value = ""  # Will default to current date
+                        else:
+                            try:
+                                # Try to parse the date in various formats
+                                from datetime import datetime
+                                date_formats = [
+                                    "%d/%m/%Y",  # 31/12/2023
+                                    "%d-%m-%Y",  # 31-12-2023
+                                    "%d.%m.%Y",  # 31.12.2023
+                                    "%d/%m/%y",  # 31/12/23
+                                    "%d-%m-%y",  # 31-12-23
+                                    "%d.%m.%y",  # 31.12.23
+                                    "%Y-%m-%d",  # 2023-12-31 (ISO format)
+                                    "%Y/%m/%d",  # 2023/12/31
+                                    "%m/%d/%Y",  # 12/31/2023 (US format)
+                                    "%b %d, %Y", # Dec 31, 2023
+                                    "%d %b %Y"   # 31 Dec 2023
+                                ]
+                                
+                                parsed_date = None
+                                for fmt in date_formats:
+                                    try:
+                                        parsed_date = datetime.strptime(field_value, fmt)
+                                        # Verify the parsed date is valid (catches things like 31/04/2024)
+                                        # by checking if reformatting keeps the same day
+                                        original_day = field_value.split('/')[0] if '/' in field_value else None
+                                        if original_day and original_day.isdigit():
+                                            if int(original_day) == parsed_date.day:
+                                                break
+                                            else:
+                                                logging.warning(f"Invalid date detected: {field_value} - day doesn't match after parsing")
+                                                parsed_date = None
+                                                continue
+                                        else:
+                                            break
+                                    except ValueError:
+                                        continue
+                                
+                                if parsed_date:
+                                    # Standardize to DD/MM/YYYY format
+                                    field_value = parsed_date.strftime("%d/%m/%Y")
+                                    logging.info(f"Parsed date '{field_value}' to standard format: {field_value}")
+                                else:
+                                    # If today or yesterday is specified
+                                    if field_value.lower() == "today":
+                                        field_value = datetime.now().strftime("%d/%m/%Y")
+                                    elif field_value.lower() == "yesterday":
+                                        from datetime import timedelta
+                                        field_value = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+                                    else:
+                                        # If we couldn't parse the date, log it but keep the value empty
+                                        # so that the current date will be used
+                                        logging.warning(f"Could not parse date format: {field_value}. Will use current date.")
+                                        field_value = ""  # This will make the system use the current date
+                            except Exception as e:
+                                logging.warning(f"Error parsing date: {str(e)}. Using current date.")
+                                field_value = ""  # This will make the system use the current date
                     
-                    updates[normalized_field] = field_value
-                    logging.info(f"Updating field {normalized_field} to {field_value}")
+                    # Only add non-empty values to updates
+                    if field_value:
+                        updates[normalized_field] = field_value
+                        logging.info(f"Updating field {normalized_field} to {field_value}")
         
         # Update the stored receipt with the new values
         if updates:
@@ -531,6 +583,7 @@ def process_text_message(text, name, creds, sender_waid):
                 f"I couldn't identify any fields to update. Please use this format:\n\n"
                 f"Payment method: [cash/card/transfer]\n"
                 f"Charge to: [personal/company/project]\n"
+                f"When: [today/yesterday/DD/MM/YYYY]\n"
                 f"Comments: [any additional notes]"
             )
             data = get_text_message_input(sender_waid, response)
@@ -549,6 +602,8 @@ def process_text_message(text, name, creds, sender_waid):
         "store name": "Store name",
         "payment method": "Payment method",
         "charge to": "Charge to",
+        "when": "When",
+        "date": "When",
         "comments": "Comments"
     }
     
@@ -559,83 +614,18 @@ def process_text_message(text, name, creds, sender_waid):
     logging.info(f"Form detected: {form_detected}")
     
     if form_detected:
-        # This looks like a form submission, so parse it and save to Google Sheets
-        parts = text.split('\n')
-        update_data = [name]  # Use the actual name from WhatsApp
+        # This looks like a form submission, parse it and use our standard prepare_for_google_sheets
+        # to ensure consistent field order
+        parsed_data = parse_manual_receipt_entry(text)
         
-        logging.info(f"Form detected. Using sender name: {name}")
+        # Add the sender name
+        parsed_data["sender_name"] = name
         
-        # Create a dictionary to store the parsed fields
-        parsed_data = {}
-        for part in parts:
-            if not part.strip():
-                continue
-                
-            # Find the partition between key and value
-            partition_index = part.find(':')
-            if partition_index == -1:
-                continue
-                
-            # Extract key and value
-            key = part[:partition_index].strip()
-            value = part[partition_index+1:].strip()
-            
-            # Skip if value is empty
-            if not value:
-                continue
-                
-            # Clean up the key (remove formatting)
-            key = key.replace('*', '')
-            
-            # Normalize the key using our mappings (case-insensitive)
-            key_lower = key.lower()
-            if key_lower in field_mappings:
-                normalized_key = field_mappings[key_lower]
-                parsed_data[normalized_key] = value
-                logging.info(f"Mapped field '{key}' to '{normalized_key}' with value '{value}'")
-            else:
-                # If no mapping found, use the original key
-                parsed_data[key] = value
-                logging.info(f"Using original field '{key}' with value '{value}'")
+        # Use the standard field formatter to get consistent order
+        formatted_values = prepare_for_google_sheets(parsed_data)
         
-        # Check if we have the minimal required fields
-        required_fields = ["What", "Amount"]
-        missing_fields = [field for field in required_fields if field not in parsed_data]
-        
-        if missing_fields:
-            # Send message about missing fields
-            missing_text = ", ".join(missing_fields)
-            text = f"Please provide the missing fields: {missing_text}. Your form submission is incomplete."
-            data = get_text_message_input(sender_waid, text)
-            send_message(data)
-            return
-        
-        # Process the data for Google Sheets
-        fields_to_process = ["What", "Amount", "IVA", "Receipt", "Store name", "Payment method", "Charge to", "Comments"]
-        
-        for field in fields_to_process:
-            value = parsed_data.get(field, "")
-            
-            # Process numeric fields - but don't convert format here, just clean up
-            # The conversion to European format will happen in append_to_sheet
-            if field in ["Amount", "IVA"] and value:
-                # Clean up any text around numbers
-                # We'll leave the actual number formatting (commas/periods) as is
-                # Just remove currency symbols and other non-numeric chars except . and ,
-                value = re.sub(r'[^\d.,\-]', '', value)
-                
-                # If value starts with a comma or period, add a 0 before it
-                if value.startswith('.') or value.startswith(','):
-                    value = '0' + value
-                
-                # If value ends with a comma or period, remove it
-                if value.endswith('.') or value.endswith(','):
-                    value = value[:-1]
-            
-            update_data.append(value)
-        
-        # Write to Google Sheets
-        receipt_num = append_to_sheet(creds, sheet_id, update_data)
+        # Write to Google Sheets using the standard field order
+        receipt_num = append_to_sheet(creds, sheet_id, formatted_values)
         
         # Send confirmation to user with receipt number
         text = f'Receipt details saved! Receipt #{receipt_num} has been added to our system. If you have a receipt image/pdf, please send it with "{receipt_num}" in the caption.'
@@ -655,6 +645,8 @@ def process_text_message(text, name, creds, sender_waid):
                 "*What*: \n"
                 "*Amount* (euros): \n"
                 "IVA (euros): \n"
+                "When:\n"
+                "_(leave empty for today's date, or use 'yesterday', or DD/MM/YYYY)_\n"
                 "Receipt: yes\n"
                 "Store name: \n"
                 "Payment method: \n"
@@ -684,13 +676,16 @@ def parse_manual_receipt_entry(text):
     field_mappings = {
         "Store name": "store_name",
         "Amount": "total_amount",
+        "Amount (euros)": "total_amount",  # Handle "(euros)" version
         "IVA": "iva",
+        "IVA (euros)": "iva",  # Handle "(euros)" version
         "Receipt": "has_receipt",
         "Payment method": "payment_method",
         "Charge to": "charge_to",
         "Comments": "comments",
         "Date": "date",
-        "What": "description"
+        "When": "when",
+        "What": "what"  # Fixed: Previously was "description"
     }
     
     # Initialize result dictionary
@@ -721,18 +716,28 @@ def parse_manual_receipt_entry(text):
         # Remove any formatting like * for bold
         key = key.replace('*', '')
         
-        # Map the field name if possible
-        internal_key = field_mappings.get(key)
-        if not internal_key:
-            # Try case-insensitive match
-            for k, v in field_mappings.items():
-                if k.lower() == key.lower():
-                    internal_key = v
-                    break
-                    
-        if not internal_key:
-            # Still not found, just use the key directly
-            internal_key = key.lower().replace(' ', '_')
+        # Check for amount pattern in key (smarter detection)
+        key_lower = key.lower()
+        if "amount" in key_lower:
+            internal_key = "total_amount"
+        elif "iva" in key_lower:
+            internal_key = "iva"
+        else:
+            # Map the field name if possible using existing logic
+            internal_key = field_mappings.get(key)
+            if not internal_key:
+                # Try case-insensitive match
+                for k, v in field_mappings.items():
+                    if k.lower() == key_lower:
+                        internal_key = v
+                        break
+                        
+            if not internal_key:
+                # Still not found, just use the key directly
+                internal_key = key.lower().replace(' ', '_')
+        
+        # Log the field mapping for debugging
+        logging.info(f"Field mapping: '{key}' -> '{internal_key}' with value '{value}'")
             
         # Process special fields
         if internal_key == "total_amount" or internal_key == "iva":
@@ -747,11 +752,18 @@ def parse_manual_receipt_entry(text):
                 value = value[:first_period_index] + value[first_period_index + 1:]
             # Remove non-numeric characters
             value = re.sub(r'[^\d.]+', '', value)
+            # Add logging for debugging
+            logging.info(f"Processed amount field '{internal_key}': '{value}'")
                 
         elif internal_key == "has_receipt":
-            # Convert yes/no or true/false to boolean
-            value = value.lower() in ["yes", "true", "1", "y"]
-            
+            # Keep as string value to match what the spreadsheet expects
+            # Convert variants of "yes"/"no" to consistent format
+            if value.lower() in ["yes", "true", "1", "y"]:
+                value = "yes"
+            elif value.lower() in ["no", "false", "0", "n"]:
+                value = "no"
+            # Otherwise keep the original value
+        
         # Store the value
         result[internal_key] = value
         
@@ -759,22 +771,23 @@ def parse_manual_receipt_entry(text):
 
 
 def is_valid_whatsapp_message(message):
-    """
-    Check if the message object has a valid WhatsApp message structure.
+    """Check if a message is a valid WhatsApp message type we can process
     
     Args:
-        message: A single message object from the webhook payload
+        message: The message object from WhatsApp
         
     Returns:
-        bool: True if the message has a valid structure, False otherwise
+        Boolean indicating if this is a valid message type
     """
-    # Check if this is a valid WhatsApp message (has text, image, or document component)
-    return bool(
-        (message.get("type") == "text" and message.get("text")) or
-        (message.get("type") == "image" and message.get("image")) or
-        (message.get("type") == "document" and message.get("document")) or
-        (message.get("type") == "audio" and message.get("audio")) or
-        (message.get("type") == "video" and message.get("video"))
+    return (
+        message and
+        isinstance(message, dict) and
+        "type" in message and
+        (
+            (message.get("type") == "text" and message.get("text")) or
+            (message.get("type") == "image" and message.get("image")) or
+            (message.get("type") == "document" and message.get("document"))
+        )
     )
 
 
@@ -926,55 +939,98 @@ def append_to_sheet(credentials, sheet_id, values_list):
         # Specify the sheet and the range where data will be appended.
         range = 'iDrea!A:K'  # Update this with your actual sheet name and range
 
-        # Convert timestamp to readable format
-        time = datetime.now().strftime('%Y-%m-%d %H:%M')
-
+        # Log the received values list for debugging
+        logging.info(f"Values to append to sheet: {values_list}")
+        
+        # The order from prepare_for_google_sheets is:
+        # [when, who, what, amount, IVA, receipt, store_name, payment_method, charge_to, comments]
+        
+        # Ensure we have at least some values
+        if not values_list:
+            logging.error("Empty values list provided to append_to_sheet")
+            return None
+            
+        # Extract key values CORRECTLY according to the prepare_for_google_sheets order
+        when_date = values_list[0] if len(values_list) > 0 else ""
+        who = values_list[1] if len(values_list) > 1 else ""
+        what = values_list[2] if len(values_list) > 2 else ""
+        amount = values_list[3] if len(values_list) > 3 else ""
+        iva = values_list[4] if len(values_list) > 4 else ""
+        receipt_value = values_list[5] if len(values_list) > 5 else "yes"
+        store_name = values_list[6] if len(values_list) > 6 else ""
+        payment_method = values_list[7] if len(values_list) > 7 else ""
+        charge_to = values_list[8] if len(values_list) > 8 else ""
+        comments = values_list[9] if len(values_list) > 9 else ""
+        
+        # Log extracted key values for debugging
+        logging.info(f"Extracted key values from values_list:")
+        logging.info(f"  When: {when_date}")
+        logging.info(f"  Who: {who}")
+        logging.info(f"  What: {what}")
+        logging.info(f"  Amount: {amount}")
+        logging.info(f"  IVA: {iva}")
+        
         # Get the next receipt number
         next_receipt_number = get_receipt_number(credentials, sheet_id)
         if next_receipt_number is None:
             logging.error("Failed to get next receipt number")
             return None
         
-        # Process values but with minimal formatting - preserve exact decimal values
+        # Process values with format conversion
         processed_values = []
-        for value in values_list:
-            if isinstance(value, str) and value:
-                # Check if this looks like a numeric value (amount or IVA)
-                # First, standardize to US format (period as decimal) for processing
-                cleaned_value = value.strip()
-                
-                # Convert comma to period for standard processing
-                if ',' in cleaned_value:
-                    cleaned_value = cleaned_value.replace(',', '.')
-                
-                # Now check if it's a valid number
-                if cleaned_value and (cleaned_value.replace('.', '', 1).isdigit() or 
-                                    (cleaned_value.startswith('-') and cleaned_value[1:].replace('.', '', 1).isdigit())):
-                    try:
-                        # Parse as float for standardization
-                        num_value = float(cleaned_value)
-                        
-                        # Just save the exact value as a string with European formatting (comma as decimal)
-                        # This is the simplest approach to preserve exact values
-                        euro_format = str(num_value).replace('.', ',')
-                        
-                        processed_values.append(euro_format)
-                        logging.info(f"Formatted number (simple): {value} -> {euro_format}")
-                    except ValueError:
-                        # If conversion fails, keep the original
-                        processed_values.append(value)
-                        logging.info(f"Could not convert to number, keeping original: {value}")
-                else:
-                    processed_values.append(value)  # Non-string values
+        
+        # Process amount, keeping European formatting
+        if amount and isinstance(amount, str):
+            cleaned_amount = amount.strip().replace('€', '')
+            if ',' in cleaned_amount:
+                processed_amount = cleaned_amount  # Already has European formatting
             else:
-                processed_values.append(value)  # Non-string values
-
-        # Prepare the data to append.
-        values = [next_receipt_number, time] + processed_values
-        body = {'values': [values]}
-
-        # Log the values being sent to Google Sheets
-        logging.info(f"Appending to Google Sheet: {values}")
+                try:
+                    # Convert to float and then to European format
+                    num_value = float(cleaned_amount.replace(',', '.'))
+                    processed_amount = str(num_value).replace('.', ',')
+                except ValueError:
+                    processed_amount = cleaned_amount
+            logging.info(f"Processed amount: {amount} -> {processed_amount}")
+        else:
+            processed_amount = amount
+        
+        # Process IVA, keeping European formatting
+        if iva and isinstance(iva, str):
+            cleaned_iva = iva.strip().replace('€', '')
+            if ',' in cleaned_iva:
+                processed_iva = cleaned_iva  # Already has European formatting
+            else:
+                try:
+                    # Convert to float and then to European format
+                    num_value = float(cleaned_iva.replace(',', '.'))
+                    processed_iva = str(num_value).replace('.', ',')
+                except ValueError:
+                    processed_iva = cleaned_iva
+            logging.info(f"Processed IVA: {iva} -> {processed_iva}")
+        else:
+            processed_iva = iva
+        
+        # Create final values array with FIXED column positions
+        # Each value goes to the right column with actual field names
+        final_values = [
+            next_receipt_number,  # A: Receipt number
+            when_date,            # B: When (date)
+            who,                  # C: Who (sender name)
+            what,                 # D: What (description)
+            processed_amount,     # E: Amount
+            processed_iva,        # F: IVA
+            receipt_value,        # G: Receipt
+            store_name,           # H: Store name
+            payment_method,       # I: Payment method
+            charge_to,            # J: Charge to
+            comments              # K: Comments
+        ]
+        
+        # Log full details of the final values for debugging
+        logging.info(f"Final values being appended to Google Sheet: {final_values}")
+        
+        body = {'values': [final_values]}
 
         # Call the Sheets API
         result = service.spreadsheets().values().append(
@@ -1050,12 +1106,6 @@ def store_extracted_receipt(wa_id, receipt_details, sender_name="User"):
     
     # Ensure receipt=yes is set
     modified_details["receipt"] = "yes"
-    
-    # Ensure consistent field naming
-    # Check for total_amount and map it to amount if amount doesn't exist
-    if "total_amount" in modified_details and "amount" not in modified_details:
-        modified_details["amount"] = modified_details["total_amount"]
-        logging.info(f"Mapped total_amount to amount: {modified_details['amount']}")
     
     # Ensure amount and IVA values just have currency symbols removed, no other formatting
     for field in ["amount", "total_amount", "iva"]:
@@ -1267,6 +1317,7 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
                         f"What:\n"
                         f"Amount:\n"
                         f"IVA:\n"
+                        f"When:\n"
                         f"Store name:\n"
                         f"Payment method:\n"
                         f"Charge to:\n"
@@ -1463,6 +1514,7 @@ def process_document_message(message, name, creds, sender_waid, folder_id):
                         f"What:\n"
                         f"Amount:\n"
                         f"IVA:\n"
+                        f"When:\n"
                         f"Store name:\n"
                         f"Payment method:\n"
                         f"Charge to:\n"
@@ -1488,7 +1540,7 @@ def process_document_message(message, name, creds, sender_waid, folder_id):
                     try:
                         if os.path.exists(file_path):
                             os.remove(file_path)
-                            logging.info(f"Temporary file {file_path} removed after error")
+                            logging.info(f"Temporary file {file_path} removed after extraction error")
                     except Exception as ex:
                         logging.error(f"Error removing temporary file after extraction error: {str(ex)}")
             
