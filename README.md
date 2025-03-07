@@ -97,11 +97,47 @@ It's good practice to run this command monthly, though Let's Encrypt certificate
 
 ### Production Deployment
 
+#### Automated Deployment with cleanup_and_deploy.sh
+
+The recommended way to deploy the application to production is using the included `cleanup_and_deploy.sh` script, which automates the entire deployment process.
+
+To deploy using the script:
+
+```bash
+# Basic usage
+./cleanup_and_deploy.sh --host <server-hostname> --key <path-to-ssh-key>
+
+# Example
+./cleanup_and_deploy.sh --host ec2-##-###-##-###.eu-west-3.compute.amazonaws.com --key ssh_key.pem
+```
+
+The script handles:
+- Stopping and removing existing containers
+- Backing up configuration files
+- Pulling the latest code from GitHub
+- Building the Docker image on the server
+- Setting up proper volume mounts for configuration files
+- Starting the container with the correct settings
+- Setting up logs
+
+For advanced options, run `./cleanup_and_deploy.sh --help` for a full list of parameters.
+
+#### Manual Deployment (Alternative)
+
+If you need to manually deploy the application:
+
 1. Build the app docker container: `docker build -f Dockerfile . -t <tag or commit SHA> --platform=linux/amd64`
 2. Save the docker container: `docker save -o idrea-bot.tar <docker image>`
 3. Copy the docker container: `scp idrea-bot.tar <ssh hostname>:~`
 4. Load the docker container to the local registry: `docker load --input idrea-bot.tar`
-5. Run the container on the production server: `docker run -d -p 8000:8000 --rm -v ~/idrea/.env:/app/.env <docker image>`
+5. Run the container on the production server:
+   ```bash 
+   docker run -d -p 8000:8000 --rm \
+       -v ~/deployment/idrea/.env:/app/.env \
+       -v ~/deployment/idrea/data:/app/data \
+       -v ~/deployment/idrea/token.json:/app/token.json \
+       --name nadlan-bot <docker image>
+   ```
 
 The production server is configured with a reverse proxy that routes traffic from `https://idrea.diligent-devs.com/webhook` to the Docker container running on port 8000.
 
@@ -184,44 +220,6 @@ docker stop nadlanbot-local && docker rm nadlanbot-local
 lsof -i :8000
 ```
 
-### Deployment
-
-For deploying to production, follow these steps:
-
-1. Build the Docker image:
-   ```bash
-   docker build -t nadlanbot . --platform=linux/amd64
-   ```
-
-2. Before deploying, ensure port 8000 is available on the server:
-   ```bash
-   ssh <server> "lsof -i :8000"
-   ```
-
-3. Stop any existing containers:
-   ```bash
-   ssh <server> "docker stop nadlan-bot && docker rm nadlan-bot"
-   ```
-
-4. Deploy the new container:
-   ```bash
-   ssh <server> "docker run -d -p 8000:8000 \
-       -v /home/ec2-user/deployment/idrea/.env:/app/.env \
-       -v /home/ec2-user/deployment/idrea/data:/app/data \
-       -v /home/ec2-user/deployment/idrea/token.json:/app/token.json \
-       --name nadlan-bot <docker image>"
-   ```
-
-5. Verify deployment:
-   ```bash
-   curl -i http://<server-ip>:8000/health
-   ```
-
-6. Alternatively, use the cleanup_and_deploy.sh script:
-   ```bash
-   ./cleanup_and_deploy.sh --host <server-hostname> --key <ssh-key-path>
-   ```
-
 ### Server Directory Structure
 
 The EC2 server uses the following directory structure for the application:
@@ -236,13 +234,14 @@ The EC2 server uses the following directory structure for the application:
 │   │   │   ├── nadlanbot-410712-ad9fec93b0df.json  # Service account key
 │   │   │   └── temp_receipts/                # Temporary storage for receipts
 │   │   └── token.json         # OAuth token for Google API
-└── NadlanBot/                 # Legacy directory (do not use for new deployments)
+├── backups/                   # Backup directory created by deployment script
+└── logs/                      # Directory for container logs
 ```
 
 **IMPORTANT NOTES**:
-1. **Use the correct directory**: All new deployments should use `/home/ec2-user/deployment/idrea/` as the base directory.
+1. **Always use the deployment script**: The `cleanup_and_deploy.sh` script handles all necessary backups and setup.
 2. **Container name**: The Docker container should be named `nadlan-bot` (with a hyphen).
-3. **Volume mounts**: Always ensure the Docker container has these three volume mounts:
+3. **Volume mounts**: The deployment script ensures these three essential volume mounts:
    - `.env` file
    - `data` directory
    - `token.json` file
