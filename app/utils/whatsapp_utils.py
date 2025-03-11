@@ -417,6 +417,20 @@ def process_text_message(text, name, creds, sender_waid):
             # User is cancelling the receipt
             logging.info(f"User cancelling receipt: {stored_receipt}")
             
+            # Check if there's a Drive link in the stored receipt and delete the file
+            if "drive_link" in stored_receipt and stored_receipt["drive_link"]:
+                drive_link = stored_receipt["drive_link"]
+                # Extract file ID from the Drive link
+                file_id_match = re.search(r'/d/([^/]+)', drive_link)
+                if file_id_match:
+                    file_id = file_id_match.group(1)
+                    logging.info(f"Attempting to delete file with ID {file_id} from Google Drive")
+                    delete_success = delete_file_from_drive(creds, file_id)
+                    if delete_success:
+                        logging.info(f"Successfully deleted file {file_id} from Google Drive")
+                    else:
+                        logging.error(f"Failed to delete file {file_id} from Google Drive")
+            
             # Remove the stored receipt
             delete_stored_receipt(sender_waid)
             
@@ -797,24 +811,29 @@ def parse_manual_receipt_entry(text):
 
 
 def is_valid_whatsapp_message(message):
-    """Check if a message is a valid WhatsApp message type we can process
+    """
+    Check if the received message is a valid WhatsApp message.
     
     Args:
-        message: The message object from WhatsApp
+        message: The message object
         
     Returns:
-        Boolean indicating if this is a valid message type
+        Boolean indicating if the message is valid
     """
-    return (
-        message and
-        isinstance(message, dict) and
-        "type" in message and
-        (
-            (message.get("type") == "text" and message.get("text")) or
-            (message.get("type") == "image" and message.get("image")) or
-            (message.get("type") == "document" and message.get("document"))
-        )
-    )
+    if not message or not isinstance(message, dict):
+        return False
+    if "type" not in message:
+        return False
+    
+    msg_type = message.get("type")
+    if msg_type == "text" and message.get("text"):
+        return True
+    elif msg_type == "image" and message.get("image"):
+        return True
+    elif msg_type == "document" and message.get("document"):
+        return True
+    
+    return False
 
 
 SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
@@ -930,8 +949,33 @@ def get_receipt_number(credentials, sheet_id):
             # Extract receipt numbers and find the max
             receipt_numbers = [int(row[0]) for row in values if row and row[0].isdigit()]
             max_receipt_number = max(receipt_numbers, default=0)  # Default to 0 if list is empty
+            
+            # Use a persistent file to track the latest assigned receipt number
+            # This ensures numbers aren't reused even if receipts are cancelled
+            tracking_file = "latest_receipt_number.txt"
+            latest_tracked_number = 0
+            
+            # Read the latest tracked number from file
+            try:
+                if os.path.exists(tracking_file):
+                    with open(tracking_file, "r") as f:
+                        latest_tracked_number = int(f.read().strip())
+                        logging.info(f"Read latest tracked receipt number: {latest_tracked_number}")
+            except Exception as e:
+                logging.error(f"Error reading tracked receipt number: {str(e)}")
+            
+            # Use the higher of the two numbers
+            next_receipt_number = max(max_receipt_number, latest_tracked_number) + 1
+            
+            # Save the new number to the tracking file
+            try:
+                with open(tracking_file, "w") as f:
+                    f.write(str(next_receipt_number))
+                logging.info(f"Saved new receipt number {next_receipt_number} to tracking file")
+            except Exception as e:
+                logging.error(f"Error saving tracked receipt number: {str(e)}")
 
-            return max_receipt_number + 1
+            return next_receipt_number
         except HttpError as api_error:
             if "invalid_grant" in str(api_error) and "JWT Signature" in str(api_error):
                 logging.error(f"JWT Signature error: {str(api_error)}")
