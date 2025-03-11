@@ -1040,8 +1040,17 @@ def append_to_sheet(credentials, sheet_id, values_list):
         logging.info(f"  Amount: {amount}")
         logging.info(f"  IVA: {iva}")
         
-        # Get the next receipt number
-        next_receipt_number = get_receipt_number(credentials, sheet_id)
+        # Check if receipt_number is provided in the values list (last element if available)
+        stored_receipt_number = values_list[10] if len(values_list) > 10 else None
+        
+        # Get the next receipt number or use the stored one if available
+        if stored_receipt_number:
+            next_receipt_number = int(stored_receipt_number)
+            logging.info(f"Using stored receipt number: {next_receipt_number}")
+        else:
+            next_receipt_number = get_receipt_number(credentials, sheet_id)
+            logging.info(f"Generated new receipt number: {next_receipt_number}")
+            
         if next_receipt_number is None:
             logging.error("Failed to get next receipt number")
             return None
@@ -1309,67 +1318,15 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
                     # Update admins
                     admin_message = f"{name} sent a receipt image for #{safe_caption}.\nDrive link: {drive_link}"
                     update_admins(admin_message, sender_waid)
-                else:
-                    first_name = get_first_name(name)
-                    data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I couldn't save your receipt image to Google Drive. Please try again.")
-                    send_message(data)
-                
-                # Clean up the temporary file
-                try:
-                    os.remove(file_path)
-                    logging.info(f"Temporary file {file_path} removed")
-                except Exception as e:
-                    logging.error(f"Error removing temporary file: {str(e)}")
-            else:
-                # No caption, process as a new receipt
-                file_path = os.path.join(temp_dir, f"receipt_temp_{uuid.uuid4()}{extension}")
-                
-                with open(file_path, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                
-                logging.info(f"Image saved temporarily to {file_path}")
-                
-                # Process the image for receipt extraction
-                try:
-                    # First, get a single receipt number to use for both the file and the receipt
-                    receipt_number = get_receipt_number(creds, os.getenv("GOOGLE_SHEET_ID"))
-                    filename = f"{receipt_number}{extension}"
-                    
-                    # Upload to Google Drive
-                    drive_link = upload_image_to_drive(creds, folder_id, file_path, filename)
-                    logging.info(f"Image uploaded to Google Drive: {drive_link}")
-                    
-                    # Now extract receipt details using OCR/AI
-                    from app.services.receipt_extraction_service import extract_receipt_details, format_extracted_details_for_whatsapp
-                    
-                    with open(file_path, "rb") as f:
-                        image_data = f.read()
-                    
-                    # Clean up the temporary file after reading it
-                    try:
-                        os.remove(file_path)
-                        logging.info(f"Temporary file {file_path} removed")
-                    except Exception as e:
-                        logging.error(f"Error removing temporary file: {str(e)}")
-                    
-                    receipt_details, error = extract_receipt_details(image_data, "image")
-                    
-                    if error:
-                        logging.error(f"Error extracting receipt details: {error}")
-                        first_name = get_first_name(name)
-                        data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I couldn't extract details from your receipt. Please try sending a clearer image or enter the details manually.")
-                        send_message(data)
-                        return
-                    
-                    # Log extracted details before modification
-                    logging.info(f"Extracted receipt details: {receipt_details}")
                     
                     # Add the Google Drive link to the receipt details
                     if drive_link:
                         receipt_details["drive_link"] = drive_link
                         logging.info(f"Added Drive link to receipt details: {drive_link}")
+                    
+                    # Add the receipt number to the receipt details
+                    receipt_details["receipt_number"] = receipt_number
+                    logging.info(f"Added receipt number {receipt_number} to receipt details")
                     
                     # Format the extracted details for WhatsApp
                     formatted_message = format_extracted_details_for_whatsapp(receipt_details)
@@ -1403,15 +1360,21 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
                     if drive_link:
                         admin_message += f"\nDrive link: {drive_link}"
                     update_admins(admin_message, sender_waid)
-                    
-                except Exception as e:
-                    logging.error(f"Error in receipt extraction: {str(e)}")
-                    data = get_text_message_input(sender_waid, "I encountered an error while processing your receipt. Please try again or enter the details manually.")
+                else:
+                    first_name = get_first_name(name)
+                    data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I couldn't save your receipt image to Google Drive. Please try again.")
                     send_message(data)
             
+            # Clean up the temporary file
+            try:
+                os.remove(file_path)
+                logging.info(f"Temporary file {file_path} removed")
+            except Exception as e:
+                logging.error(f"Error removing temporary file: {str(e)}")
+            
         except Exception as e:
-            logging.error(f"Error downloading image: {str(e)}")
-            data = get_text_message_input(sender_waid, "I couldn't download your image. Please try again.")
+            logging.error(f"Error in receipt extraction or downloading image: {str(e)}")
+            data = get_text_message_input(sender_waid, "I encountered an error while processing your receipt. Please try again or enter the details manually.")
             send_message(data)
             
     except Exception as e:
@@ -1511,6 +1474,16 @@ def process_document_message(message, name, creds, sender_waid, folder_id):
                     # Update admins
                     admin_message = f"{name} sent a receipt document for #{safe_caption}.\nDrive link: {drive_link}"
                     update_admins(admin_message, sender_waid)
+                    
+                    # Store the extracted receipt details for this user and add the drive link
+                    if drive_link:
+                        receipt_details["drive_link"] = drive_link
+                    
+                    # Add the receipt number to the receipt details
+                    receipt_details["receipt_number"] = receipt_number
+                    logging.info(f"Added receipt number {receipt_number} to receipt details")
+                    
+                    store_extracted_receipt(sender_waid, receipt_details, name)
                 else:
                     first_name = get_first_name(name)
                     data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I couldn't save your receipt document to Google Drive. Please try again.")
@@ -1572,6 +1545,11 @@ def process_document_message(message, name, creds, sender_waid, folder_id):
                     # Store the extracted receipt details for this user and add the drive link
                     if drive_link:
                         receipt_details["drive_link"] = drive_link
+                    
+                    # Add the receipt number to the receipt details
+                    receipt_details["receipt_number"] = receipt_number
+                    logging.info(f"Added receipt number {receipt_number} to receipt details")
+                    
                     store_extracted_receipt(sender_waid, receipt_details, name)
                     
                     # Send the formatted message with the receipt number

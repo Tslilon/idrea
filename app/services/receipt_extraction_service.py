@@ -420,6 +420,12 @@ def prepare_for_google_sheets(details):
         details.get("comments", "")                    # comments
     ]
     
+    # Add receipt_number as the last element if it exists
+    # This will be used by append_to_sheet to ensure consistent numbering
+    if "receipt_number" in details:
+        final_values.append(details.get("receipt_number"))
+        logging.info(f"Added receipt number {details.get('receipt_number')} to prepared values")
+    
     # Log the values being returned for debugging
     logging.info(f"Prepared values for Google Sheets: {final_values}")
     
