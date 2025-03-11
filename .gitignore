@@ -100,3 +100,4 @@ target/
 local dev examples/
 *.amazonaws.com
 data/nadlanbot-410712-*.json
+data/temp_receipts/*

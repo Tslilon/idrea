@@ -964,8 +964,16 @@ def get_receipt_number(credentials, sheet_id):
             except Exception as e:
                 logging.error(f"Error reading tracked receipt number: {str(e)}")
             
-            # Use the higher of the two numbers
-            next_receipt_number = max(max_receipt_number, latest_tracked_number) + 1
+            # CHANGED: Always prioritize the Google Sheet's max number over the tracking file
+            # If there are entries in the sheet, use sheet max + 1, otherwise use tracking file + 1
+            if receipt_numbers:  # If we have entries in the sheet
+                next_receipt_number = max_receipt_number + 1
+                # Also update the tracking file if it's behind
+                if next_receipt_number > latest_tracked_number:
+                    latest_tracked_number = next_receipt_number
+            else:
+                # No entries in the sheet, use tracking file + 1
+                next_receipt_number = latest_tracked_number + 1
             
             # Save the new number to the tracking file
             try:
@@ -1318,48 +1326,6 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
                     # Update admins
                     admin_message = f"{name} sent a receipt image for #{safe_caption}.\nDrive link: {drive_link}"
                     update_admins(admin_message, sender_waid)
-                    
-                    # Add the Google Drive link to the receipt details
-                    if drive_link:
-                        receipt_details["drive_link"] = drive_link
-                        logging.info(f"Added Drive link to receipt details: {drive_link}")
-                    
-                    # Add the receipt number to the receipt details
-                    receipt_details["receipt_number"] = receipt_number
-                    logging.info(f"Added receipt number {receipt_number} to receipt details")
-                    
-                    # Format the extracted details for WhatsApp
-                    formatted_message = format_extracted_details_for_whatsapp(receipt_details)
-                    
-                    # Store the extracted receipt details for this user
-                    store_extracted_receipt(sender_waid, receipt_details, name)
-                    
-                    # Send the formatted message with the receipt number
-                    first_name = get_first_name(name)
-                    confirmation_message = (
-                        f"Hi {first_name}! I've extracted the following details from your receipt:\n\n"
-                        f"{formatted_message}\n\n"
-                        f"Receipt #{receipt_number} has been created.\n\n"
-                        f"✏️ To add or correct information, reply with any of these fields:\n"
-                        f"What:\n"
-                        f"Amount:\n"
-                        f"IVA:\n"
-                        f"When:\n"
-                        f"Store name:\n"
-                        f"Payment method:\n"
-                        f"Charge to:\n"
-                        f"Comments:\n\n"
-                        f"✅ To confirm without adding information, reply \"confirm\" or \"yes\".\n"
-                        f"❌ To cancel this receipt, reply \"cancel\" or \"no\"."
-                    )
-                    data = get_text_message_input(sender_waid, confirmation_message)
-                    send_message(data)
-                    
-                    # Update admins
-                    admin_message = f"{name} sent a receipt image. Details extracted:\n\n{formatted_message}\n\nReceipt {receipt_number} created."
-                    if drive_link:
-                        admin_message += f"\nDrive link: {drive_link}"
-                    update_admins(admin_message, sender_waid)
                 else:
                     first_name = get_first_name(name)
                     data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I couldn't save your receipt image to Google Drive. Please try again.")
@@ -1474,16 +1440,6 @@ def process_document_message(message, name, creds, sender_waid, folder_id):
                     # Update admins
                     admin_message = f"{name} sent a receipt document for #{safe_caption}.\nDrive link: {drive_link}"
                     update_admins(admin_message, sender_waid)
-                    
-                    # Store the extracted receipt details for this user and add the drive link
-                    if drive_link:
-                        receipt_details["drive_link"] = drive_link
-                    
-                    # Add the receipt number to the receipt details
-                    receipt_details["receipt_number"] = receipt_number
-                    logging.info(f"Added receipt number {receipt_number} to receipt details")
-                    
-                    store_extracted_receipt(sender_waid, receipt_details, name)
                 else:
                     first_name = get_first_name(name)
                     data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I couldn't save your receipt document to Google Drive. Please try again.")
