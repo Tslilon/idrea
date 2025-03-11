@@ -411,6 +411,32 @@ def process_text_message(text, name, creds, sender_waid):
             send_message(data)
             return
     
+    # Handle cancellation keywords
+    if text_lower in ["cancel", "no", "n"]:
+        if stored_receipt:
+            # User is cancelling the receipt
+            logging.info(f"User cancelling receipt: {stored_receipt}")
+            
+            # Remove the stored receipt
+            delete_stored_receipt(sender_waid)
+            
+            # Send cancellation confirmation
+            first_name = get_first_name(name)
+            cancel_message = f"I've cancelled the receipt creation process, {first_name}. No data has been saved."
+            data = get_text_message_input(sender_waid, cancel_message)
+            send_message(data)
+            
+            # Update admins
+            update_admins(f"{name} cancelled a receipt", sender_waid)
+            
+            return
+        else:
+            # No stored receipt to cancel
+            response = "I don't have any pending receipt details to cancel."
+            data = get_text_message_input(sender_waid, response)
+            send_message(data)
+            return
+    
     # Handling receipt image caption requests
     if text.isdigit():
         response = f"Looking for receipt #{text}..."
