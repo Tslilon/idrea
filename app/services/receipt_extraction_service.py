@@ -89,12 +89,13 @@ RECEIPT_SCHEMA = {
             "description": "The date of the transaction in DD/MM/YYYY format if available"
         }
     },
-    "required": ["what", "store_name", "total_amount", "iva", "date"]
+    "required": ["what", "store_name", "total_amount", "iva", "date"],
+    "additionalProperties": False
 }
 
 EXTRACTION_PROMPT = """
 Analyze this receipt image and extract the following key information:
-1. What: Brief up to 5 words description of the purchase (what was bought - name of the items or services, etc., and translate to English if suitable. if it's a lot of itmes, give the category.)
+1. What: Brief up to 5 words description of the purchase (what was bought - name of the items or services, etc., and translate to English if suitable. if it's a lot of itmes, give the category. E.g. "White sugar packets from Dirty Harry (500 units of 7 grams)" -> "White sugar packets")
 2. Store name: The business name that issued the receipt
 3. Total amount: The total amount paid (including any taxes)
 4. IVA/VAT amount: The Spanish VAT tax amount (if shown on receipt)
@@ -454,7 +455,7 @@ def extract_from_image(base64_image):
                 {
                     "role": "user", 
                     "content": [
-                        {"type": "text", "text": "Extract the receipt details from this image."},
+                        {"type": "text", "text": EXTRACTION_PROMPT},
                         {
                             "type": "image_url",
                             "image_url": {
@@ -469,33 +470,7 @@ def extract_from_image(base64_image):
                 "json_schema": {
                     "name": "ReceiptDetails",
                     "strict": True,
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "what": {
-                                "type": "string",
-                                "description": "Description of the purchase or product (what was bought) translated to English if appropriate"
-                            },
-                            "store_name": {
-                                "type": "string",
-                                "description": "The name of the store or vendor as shown on the receipt"
-                            },
-                            "total_amount": {
-                                "type": "string",
-                                "description": "The total amount paid"
-                            },
-                            "iva": {
-                                "type": "string",
-                                "description": "The VAT/IVA tax amount"
-                            },
-                            "date": {
-                                "type": "string",
-                                "description": "The date of the transaction in DD/MM/YYYY format if available"
-                            }
-                        },
-                        "required": ["what", "store_name", "total_amount", "iva", "date"],
-                        "additionalProperties": False
-                    }
+                    "schema": RECEIPT_SCHEMA
                 }
             }
         )
