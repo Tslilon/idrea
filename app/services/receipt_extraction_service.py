@@ -70,7 +70,7 @@ RECEIPT_SCHEMA = {
     "properties": {
         "what": {
             "type": "string",
-            "description": "Description of the purchase or product (what was bought) in English"
+            "description": "Concise description of the purchase or product (what was bought) in English"
         },
         "store_name": {
             "type": "string",
@@ -94,7 +94,7 @@ RECEIPT_SCHEMA = {
 
 EXTRACTION_PROMPT = """
 Analyze this receipt image and extract the following key information:
-1. What: Brief up to 5 words description of the purchase (what was bought - items or services, etc., and translate English if suitable and not an explicit product name)
+1. What: Brief up to 5 words description of the purchase (what was bought - name of the items or services, etc., and translate to English if suitable. if it's a lot of itmes, give the category.)
 2. Store name: The business name that issued the receipt
 3. Total amount: The total amount paid (including any taxes)
 4. IVA/VAT amount: The Spanish VAT tax amount (if shown on receipt)
@@ -106,7 +106,7 @@ Important guidelines:
 - For amounts, extract exactly as shown on the receipt (no need for the currency symbol)
 
 When extracting the "what" field:
-- Provide a brief description of what was purchased
+- Provide a very brief description of what was purchased
 - If multiple items, summarize (e.g., "Office supplies", "Computer equipment")
 - If not clearly visible, infer from context or mark as "unknown"
 
