@@ -1330,13 +1330,13 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
                     first_name = get_first_name(name)
                     data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I couldn't save your receipt image to Google Drive. Please try again.")
                     send_message(data)
-            
-            # Clean up the temporary file
-            try:
-                os.remove(file_path)
-                logging.info(f"Temporary file {file_path} removed")
-            except Exception as e:
-                logging.error(f"Error removing temporary file: {str(e)}")
+                
+                # Clean up the temporary file
+                try:
+                    os.remove(file_path)
+                    logging.info(f"Temporary file {file_path} removed")
+                except Exception as e:
+                    logging.error(f"Error removing temporary file: {str(e)}")
             else:
                 # No caption, process as a new receipt
                 # Generate a unique filename for temporary storage
