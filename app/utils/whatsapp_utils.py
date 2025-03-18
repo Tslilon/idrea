@@ -1337,10 +1337,106 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
                 logging.info(f"Temporary file {file_path} removed")
             except Exception as e:
                 logging.error(f"Error removing temporary file: {str(e)}")
+            else:
+                # No caption, process as a new receipt
+                # Generate a unique filename for temporary storage
+                file_path = os.path.join(temp_dir, f"receipt_temp_{uuid.uuid4()}{extension}")
+                
+                with open(file_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                
+                logging.info(f"Image saved temporarily to {file_path}")
+                
+                # Process the image for receipt extraction
+                try:
+                    # First, get a single receipt number to use for both the file and the receipt
+                    receipt_number = get_receipt_number(creds, os.getenv("GOOGLE_SHEET_ID"))
+                    drive_filename = f"{receipt_number}{extension}"
+                    
+                    # Upload to Google Drive
+                    drive_link = upload_image_to_drive(creds, folder_id, file_path, drive_filename)
+                    logging.info(f"Image uploaded to Google Drive: {drive_link}")
+                    
+                    # Extract receipt details using OCR/AI
+                    from app.services.receipt_extraction_service import extract_receipt_details, format_extracted_details_for_whatsapp
+                    
+                    with open(file_path, "rb") as f:
+                        image_data = f.read()
+                    
+                    # Clean up the temporary file
+                    try:
+                        os.remove(file_path)
+                        logging.info(f"Temporary file {file_path} removed")
+                    except Exception as e:
+                        logging.error(f"Error removing temporary file: {str(e)}")
+                    
+                    receipt_details, error = extract_receipt_details(image_data, "image")
+                    
+                    if error:
+                        logging.error(f"Error extracting receipt details: {error}")
+                        first_name = get_first_name(name)
+                        data = get_text_message_input(sender_waid, f"I'm sorry {first_name}, I couldn't extract details from your receipt. Please try sending a clearer image or enter the details manually.")
+                        send_message(data)
+                        return
+                    
+                    # Format the extracted details for WhatsApp
+                    formatted_message = format_extracted_details_for_whatsapp(receipt_details)
+                    
+                    # Store the extracted receipt details for this user and add the drive link
+                    if drive_link:
+                        receipt_details["drive_link"] = drive_link
+                    
+                    # Add the receipt number to the receipt details
+                    receipt_details["receipt_number"] = receipt_number
+                    logging.info(f"Added receipt number {receipt_number} to receipt details")
+                    
+                    store_extracted_receipt(sender_waid, receipt_details, name)
+                    
+                    # Send the formatted message with the receipt number
+                    first_name = get_first_name(name)
+                    confirmation_message = (
+                        f"Hi {first_name}! I've extracted the following details from your receipt:\n\n"
+                        f"{formatted_message}\n\n"
+                        f"Receipt #{receipt_number} has been created.\n\n"
+                        f"✏️ To add or correct information, reply with any of these fields:\n"
+                        f"What:\n"
+                        f"Amount:\n"
+                        f"IVA:\n"
+                        f"When:\n"
+                        f"Store name:\n"
+                        f"Payment method:\n"
+                        f"Charge to:\n"
+                        f"Comments:\n\n"
+                        f"✅ To confirm without adding information, reply \"confirm\" or \"yes\".\n"
+                        f"❌ To cancel this receipt, reply \"cancel\" or \"no\"."
+                    )
+                    data = get_text_message_input(sender_waid, confirmation_message)
+                    send_message(data)
+                    
+                    # Update admins
+                    admin_message = f"{name} sent a receipt image. Details extracted:\n\n{formatted_message}\n\nReceipt {receipt_number} created."
+                    if drive_link:
+                        admin_message += f"\nDrive link: {drive_link}"
+                    update_admins(admin_message, sender_waid)
+                    
+                except Exception as e:
+                    logging.error(f"Error in receipt extraction: {str(e)}")
+                    data = get_text_message_input(sender_waid, "I encountered an error while processing your receipt. Please try again or enter the details manually.")
+                    send_message(data)
+                    
+                    # Make sure to clean up the temporary file if it still exists
+                    try:
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                            logging.info(f"Temporary file {file_path} removed after extraction error")
+                    except Exception as ex:
+                        logging.error(f"Error removing temporary file after extraction error: {str(ex)}")
             
         except Exception as e:
-            logging.error(f"Error in receipt extraction or downloading image: {str(e)}")
-            data = get_text_message_input(sender_waid, "I encountered an error while processing your receipt. Please try again or enter the details manually.")
+            logging.error(f"Error downloading image: {str(e)}")
+            data = get_text_message_input(sender_waid, "I couldn't download your image. Please try again.")
             send_message(data)
             
     except Exception as e:
