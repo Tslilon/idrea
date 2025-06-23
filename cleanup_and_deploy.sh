@@ -290,6 +290,7 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
         touch \$LOG_FILE
         chmod 666 \$LOG_FILE
         
+        # Start container normally without redirecting startup output
         docker run -d \
           --name nadlan-bot \
           --restart unless-stopped \
@@ -297,10 +298,18 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
           -v ~/deployment/idrea/.env:/app/.env \
           -v ~/deployment/idrea/data:/app/data \
           -v ~/deployment/idrea/token.json:/app/token.json \
-          nadlan-bot:latest > \$LOG_FILE 2>&1
+          --log-driver json-file \
+          --log-opt max-size=100m \
+          --log-opt max-file=3 \
+          nadlan-bot:latest
+        
+        # Set up continuous log streaming to persistent file in background
+        echo "Setting up continuous log streaming to: \$LOG_FILE"
+        nohup docker logs -f nadlan-bot >> \$LOG_FILE 2>&1 &
         
         echo "Logs will be saved to: \$LOG_FILE"
         echo "You can view logs with: docker logs nadlan-bot"
+        echo "Or view persistent logs with: tail -f \$LOG_FILE"
     else
         # Run without persistent logging
         docker run -d \

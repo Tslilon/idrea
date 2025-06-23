@@ -5,6 +5,9 @@ openai~=1.7.0
 python-dotenv~=1.0.0
 pillow~=10.1.0
 
+# Rate limiting for security
+Flask-Limiter>=3.5.0
+
 # Google API dependencies
 google-api-python-client
 google-auth-oauthlib

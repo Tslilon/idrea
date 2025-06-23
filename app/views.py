@@ -2,6 +2,8 @@ import logging
 import json
 
 from flask import Blueprint, request, jsonify, current_app
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from .decorators.security import signature_required
 from .utils.whatsapp_utils import (
@@ -10,6 +12,23 @@ from .utils.whatsapp_utils import (
 )
 
 webhook_blueprint = Blueprint("webhook", __name__)
+
+
+def get_real_ip():
+    """Get the real IP address from X-Forwarded-For header when behind a proxy"""
+    if request.headers.get('X-Forwarded-For'):
+        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
+    elif request.headers.get('X-Real-IP'):
+        return request.headers.get('X-Real-IP')
+    else:
+        return get_remote_address()
+
+
+# Initialize limiter for this blueprint
+limiter = Limiter(
+    key_func=get_real_ip,
+    storage_uri="memory://"
+)
 
 
 def handle_message():
@@ -130,10 +149,12 @@ def verify():
 
 
 @webhook_blueprint.route("/webhook", methods=["GET"])
+@limiter.limit("10 per minute")  # Allow webhook verification
 def webhook_get():
     return verify()
 
 @webhook_blueprint.route("/webhook", methods=["POST"])
+@limiter.limit("100 per minute")  # Allow legitimate WhatsApp messages
 # Temporarily commenting out the signature_required decorator to see if that's the issue
 # @signature_required
 def webhook_post():
@@ -175,6 +196,7 @@ def webhook_post():
 
 # Add a simple health check endpoint
 @webhook_blueprint.route("/health", methods=["GET"])
+@limiter.limit("30 per minute")  # Allow health checks but limit scanning
 def health_check():
     """
     Simple health check endpoint to verify the application is running.
@@ -184,5 +206,19 @@ def health_check():
         "version": "1.0.1",
         "environment": current_app.config.get("ENV", "production")
     }), 200
+
+# Add a rate-limited catch-all route for security scanning attempts
+@webhook_blueprint.route('/', defaults={'path': ''})
+@webhook_blueprint.route('/<path:path>')
+@limiter.limit("5 per minute")  # Very restrictive for unknown paths
+def catch_all(path):
+    """
+    Catch-all route for security scanning attempts.
+    Returns 404 but logs the attempt for monitoring.
+    """
+    real_ip = get_real_ip()
+    user_agent = request.headers.get('User-Agent', 'Unknown')
+    logging.warning(f"Security scan attempt detected: {request.method} {request.url} from {real_ip} - User-Agent: {user_agent}")
+    return jsonify({"error": "Not found"}), 404
 
 
