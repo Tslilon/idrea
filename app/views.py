@@ -58,7 +58,7 @@ def handle_message():
         
         # Only log detailed info if this contains actual messages or debugging is enabled
         if contains_messages:
-            logging.info(f"Processing webhook data with messages: {json.dumps(data, indent=2)}")
+            logging.info(f"Processing WhatsApp message from user")
         else:
             # Minimal logging for status updates
             if "entry" in data and len(data["entry"]) > 0 and "changes" in data["entry"][0]:
@@ -73,37 +73,47 @@ def handle_message():
             # Extract the message data
             if "entry" in data and len(data["entry"]) > 0:
                 entry = data["entry"][0]
-                if contains_messages:
-                    logging.info(f"Processing entry: {json.dumps(entry, indent=2)}")
+                # Only log entry details in debug mode
+                if contains_messages and logging.getLogger().level <= logging.DEBUG:
+                    logging.debug(f"Processing entry: {json.dumps(entry, indent=2)}")
                 
                 if "changes" in entry and len(entry["changes"]) > 0:
                     change = entry["changes"][0]
-                    if contains_messages:
-                        logging.info(f"Processing change: {json.dumps(change, indent=2)}")
+                    # Only log change details in debug mode
+                    if contains_messages and logging.getLogger().level <= logging.DEBUG:
+                        logging.debug(f"Processing change: {json.dumps(change, indent=2)}")
                     
                     if "value" in change:
                         value = change["value"]
-                        if contains_messages:
-                            logging.info(f"Processing value: {json.dumps(value, indent=2)}")
+                        # Only log value details in debug mode
+                        if contains_messages and logging.getLogger().level <= logging.DEBUG:
+                            logging.debug(f"Processing value: {json.dumps(value, indent=2)}")
                         
                         # Check if there are messages
                         if "messages" in value and len(value["messages"]) > 0:
                             # Process each message
                             for message in value["messages"]:
-                                logging.info(f"Processing message: {json.dumps(message, indent=2)}")
+                                # Only log message details in debug mode
+                                if logging.getLogger().level <= logging.DEBUG:
+                                    logging.debug(f"Processing message: {json.dumps(message, indent=2)}")
+                                else:
+                                    # Log minimal info for production
+                                    msg_type = message.get("type", "unknown")
+                                    logging.info(f"Processing {msg_type} message")
                                 
                                 # Validate the message format
                                 if is_valid_whatsapp_message(message):
                                     # Process the message
                                     phone_number_id = value.get("metadata", {}).get("phone_number_id")
-                                    logging.info(f"Using phone_number_id: {phone_number_id}")
+                                    if logging.getLogger().level <= logging.DEBUG:
+                                        logging.debug(f"Using phone_number_id: {phone_number_id}")
                                     
                                     process_whatsapp_message(message, phone_number_id)
                                 else:
-                                    logging.warning(f"Invalid message format: {message}")
+                                    logging.warning(f"Invalid message format received")
                         else:
-                            if contains_messages:
-                                logging.info("No messages found in the webhook payload")
+                            if contains_messages and logging.getLogger().level <= logging.DEBUG:
+                                logging.debug("No messages found in the webhook payload")
                     else:
                         if contains_messages:
                             logging.warning("No 'value' field in the change object")
@@ -158,7 +168,7 @@ def webhook_get():
 # Temporarily commenting out the signature_required decorator to see if that's the issue
 # @signature_required
 def webhook_post():
-    logging.info("Received webhook POST request")
+    logging.debug("Received webhook POST request")
     try:
         # Get the request body
         data = request.get_json()
@@ -175,11 +185,11 @@ def webhook_post():
                         if "messages" in value and len(value["messages"]) > 0:
                             contains_messages = True
         
-        # Only log detailed webhook payload if it contains actual messages
-        if contains_messages:
+        # Only log detailed webhook payload in debug mode
+        if contains_messages and logging.getLogger().level <= logging.DEBUG:
             # Log the raw request payload for actual messages
-            logging.info(f"Webhook payload: {request.get_data(as_text=True)}")
-            logging.info(f"Parsed webhook data: {json.dumps(data, indent=2)}")
+            logging.debug(f"Webhook payload: {request.get_data(as_text=True)}")
+            logging.debug(f"Parsed webhook data: {json.dumps(data, indent=2)}")
         
         # Check if this is a WhatsApp API event
         if "object" in data and data["object"] == "whatsapp_business_account":
@@ -188,7 +198,7 @@ def webhook_post():
             return jsonify({"status": "success"}), 200
         else:
             # Not a WhatsApp API event
-            logging.warning(f"Received non-WhatsApp event: {data}")
+            logging.warning(f"Received non-WhatsApp event")
             return jsonify({"status": "error", "message": "Not a WhatsApp API event"}), 400
     except Exception as e:
         logging.error(f"Error processing webhook: {str(e)}", exc_info=True)
