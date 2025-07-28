@@ -101,3 +101,9 @@ local dev examples/
 *.amazonaws.com
 data/nadlanbot-410712-*.json
 data/temp_receipts/*
+
+# Exclude sensitive credential files from environments directory
+environments/*/data/*.json
+environments/*/token.json
+environments/*/.env
+credentials.json

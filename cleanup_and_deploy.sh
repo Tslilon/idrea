@@ -333,8 +333,71 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
     echo "Container is available at: http://$SSH_HOST:$PORT"
 EOF
 
+# Step 6: Set up SSL certificate auto-renewal using systemd timers
+echo "Step 6: Setting up SSL certificate auto-renewal..."
+ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << 'EOF'
+    # Check if SSL renewal is already configured
+    if sudo systemctl is-active --quiet certbot-renewal.timer; then
+        echo "SSL certificate renewal timer already exists and is active."
+    else
+        echo "Setting up SSL certificate auto-renewal using systemd timers..."
+        
+        # Clean up any stuck certbot processes
+        sudo pkill certbot 2>/dev/null || true
+        sudo rm -f /var/lib/letsencrypt/.certbot.lock 2>/dev/null || true
+        
+        # Create systemd service file for SSL renewal
+        sudo tee /etc/systemd/system/certbot-renewal.service > /dev/null << 'SERVICE_EOF'
+[Unit]
+Description=Certbot Renewal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/certbot renew --quiet
+User=root
+SERVICE_EOF
+
+        # Create systemd timer for monthly renewal
+        sudo tee /etc/systemd/system/certbot-renewal.timer > /dev/null << 'TIMER_EOF'
+[Unit]
+Description=Certbot Renewal Timer
+Requires=certbot-renewal.service
+
+[Timer]
+OnCalendar=monthly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+TIMER_EOF
+
+        # Enable and start the timer
+        sudo systemctl daemon-reload
+        sudo systemctl enable certbot-renewal.timer
+        sudo systemctl start certbot-renewal.timer
+        
+        echo "SSL certificate auto-renewal configured successfully!"
+        echo "Certificate will be checked for renewal monthly on the 1st of each month."
+    fi
+    
+    # Display current SSL certificate status
+    echo "Current SSL certificate status:"
+    sudo certbot certificates 2>/dev/null || echo "Could not retrieve certificate information"
+    
+    # Display timer status
+    echo "SSL renewal timer status:"
+    sudo systemctl status certbot-renewal.timer --no-pager -l
+    
+    echo "Next scheduled renewals:"
+    sudo systemctl list-timers | grep certbot || echo "No certbot timers found"
+EOF
+
 echo "Cleanup and redeployment complete!"
 echo "Your application is available at: http://$SSH_HOST:$PORT"
+echo "HTTPS webhook is available at: https://idrea.diligent-devs.com/webhook"
+echo "SSL certificate auto-renewal has been configured to run monthly."
 echo "To view logs on the server run: ssh -i $SSH_KEY $SSH_USER@$SSH_HOST 'docker logs nadlan-bot'"
 # echo "To start a local tunnel for webhook testing, run:"
 # echo "lt --port 8080 --subdomain curly-laws-smile-just-for-me" 

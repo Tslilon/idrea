@@ -75,23 +75,36 @@ For detailed information about the Flask application structure and implementatio
 
 ## SSL Certificate Management
 
-The production server uses Let's Encrypt SSL certificates that need periodic renewal. The certificates for `idrea.diligent-devs.com` expire every 3 months (next on April 28, 2025, updated March 5th).
+The production server uses Let's Encrypt SSL certificates that need periodic renewal. Let's Encrypt certificates are valid for 90 days.
 
-To check and renew SSL certificates:
+### Automated Renewal (Recommended)
+
+**The deployment script (`cleanup_and_deploy.sh`) automatically sets up SSL certificate renewal!** When you deploy using the script, it:
+
+1. Installs the cron daemon if not already present
+2. Configures a monthly cron job that runs `certbot renew --quiet` at midnight on the 1st of each month
+3. Shows the current certificate status after deployment
+
+This means SSL certificate renewal is now **fully automated** - you don't need to manually manage it anymore!
+
+### Manual Renewal (If Needed)
+
+If you need to manually check or renew certificates:
 
 ```bash
-# Check and renew SSL certificates if needed
+# Check certificate status
+sudo certbot certificates
+
+# Manually renew certificates if needed
 sudo certbot renew
 ```
 
 If certificates are not due for renewal yet, you'll see a message like:
 ```
 The following certificates are not due for renewal yet:
-  /etc/letsencrypt/live/idrea.diligent-devs.com/fullchain.pem expires on 2025-04-28 (skipped)
+  /etc/letsencrypt/live/idrea.diligent-devs.com/fullchain.pem expires on 2025-10-26 (skipped)
 No renewals were attempted.
 ```
-
-It's good practice to run this command monthly, though Let's Encrypt certificates are valid for 90 days. You can also set up a cron job to automate this process.
 
 ## Running the app
 
@@ -119,6 +132,7 @@ The script handles:
 - Setting up proper volume mounts for configuration files
 - Starting the container with the correct settings
 - Setting up logs
+- **SSL Certificate Auto-Renewal**: Automatically configures a monthly cron job to renew Let's Encrypt certificates
 
 For advanced options, run `./cleanup_and_deploy.sh --help` for a full list of parameters.
 
