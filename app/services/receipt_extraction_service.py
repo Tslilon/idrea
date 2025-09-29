@@ -59,7 +59,7 @@ def get_openai_client():
             raise RuntimeError(f"Could not initialize OpenAI client: {str(e)}, then: {str(e2)}")
 
 # OpenAI API configuration
-OPENAI_MODEL = "gpt-4o-mini"  # Using gpt-4o for better image analysis
+OPENAI_MODEL = "gpt-4o"  # Using gpt-4o for better image analysis
 OPENAI_MAX_TOKENS = 4096  # Set token limit based on complexity of receipts
 OPENAI_TEMPERATURE = 0.0  # Use 0 temperature for deterministic outputs
 EXTRACTION_DELAY = 0.5  # Add delay between extraction attempts if needed
@@ -90,7 +90,7 @@ RECEIPT_SCHEMA = {
         },
         "company": {
             "type": "string",
-            "description": "The paying company from the closed list: NADLAN VRGN HOLDINGS SL, DILIGENTE RE MANAGEMENT SL, NADLAN ROSENFELD. Only assign if clearly identifiable from receipt text (e.g., NADLAN appears). Leave empty if uncertain."
+            "description": "The paying company of the client from the closed list: NADLAN VRGN HOLDINGS SL, DILIGENTE RE MANAGEMENT SL, NADLAN ROSENFELD. Only assign if clearly identifiable from receipt text (e.g., NADLAN appears). Leave empty if uncertain."
         }
     },
     "required": ["what", "store_name", "total_amount", "iva", "date", "company"],
@@ -100,11 +100,11 @@ RECEIPT_SCHEMA = {
 EXTRACTION_PROMPT = """
 Analyze this receipt image and extract the following key information:
 1. What: Brief up to 5 words description of the purchase (what was bought - name of the items or services, etc., and translate to English if suitable. if it's a lot of itmes, give the category. E.g. "White sugar packets from Dirty Harry (500 units of 7 grams)" -> "White sugar packets")
-2. Store name: The business name that issued the receipt
+2. Store name: The business name that issued the receipt (do not confuse this with the client company name)
 3. Total amount: The total amount paid (including any taxes)
 4. IVA/VAT amount: The Spanish VAT tax amount (if shown on receipt)
 5. Date: The date of the transaction (if shown on receipt)
-6. Company: The paying company (see details below)
+6. Company: The paying company, the client, do not confuse this with the store name (see details below)
 
 Important guidelines:
 - If a field isn't visible or doesn't exist, leave it empty
@@ -117,7 +117,8 @@ When extracting the "what" field:
 - If not clearly visible, infer from context or mark as "unknown"
 
 When extracting the store name:
-- Use the most prominent business name on the receipt
+- Use the **issuer/sender of the receipt** (often shown under “Nombre” or with NIF/CIF, e.g. vendor or business name)
+- Do NOT take the “cliente” or “client” section (where NADLAN / DILIGENTE / ROSENFELD may appear). Those belong only in the "company" field.
 - Don't include slogans or addresses
 
 When extracting amounts:
@@ -129,7 +130,7 @@ When extracting the date:
 - If no date is visible, leave this field empty
 
 When extracting the company:
-- Look for text on the receipt that indicates the paying company
+- Look specifically in the “cliente” / “client” / billing section for the paying company (the client)
 - Only select from this exact list: "NADLAN VRGN HOLDINGS SL", "DILIGENTE RE MANAGEMENT SL", "NADLAN ROSENFELD"
 - Be conservative: only assign a company if it's clearly identifiable
 - Examples of clear identifiers:
