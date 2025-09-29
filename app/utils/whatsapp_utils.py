@@ -644,7 +644,8 @@ def process_text_message(text, name, creds, sender_waid):
         "charge to": "Charge to",
         "when": "When",
         "date": "When",
-        "comments": "Comments"
+        "comments": "Comments",
+        "company": "Company"
     }
     
     # Check if this looks like a receipt form submission - use case-insensitive matching
@@ -725,7 +726,8 @@ def parse_manual_receipt_entry(text):
         "Comments": "comments",
         "Date": "date",
         "When": "when",
-        "What": "what"  # Fixed: Previously was "description"
+        "What": "what",  # Fixed: Previously was "description"
+        "Company": "company"
     }
     
     # Initialize result dictionary
@@ -1021,7 +1023,7 @@ def append_to_sheet(credentials, sheet_id, values_list):
         logging.info(f"Values to append to sheet: {values_list}")
         
         # The order from prepare_for_google_sheets is:
-        # [when, who, what, amount, IVA, receipt, store_name, payment_method, charge_to, comments]
+        # [when, who, what, amount, IVA, receipt, store_name, payment_method, charge_to, comments, company]
         
         # Ensure we have at least some values
         if not values_list:
@@ -1039,6 +1041,7 @@ def append_to_sheet(credentials, sheet_id, values_list):
         payment_method = values_list[7] if len(values_list) > 7 else ""
         charge_to = values_list[8] if len(values_list) > 8 else ""
         comments = values_list[9] if len(values_list) > 9 else ""
+        company = values_list[10] if len(values_list) > 10 else ""
         
         # Log extracted key values for debugging
         logging.info(f"Extracted key values from values_list:")
@@ -1111,7 +1114,8 @@ def append_to_sheet(credentials, sheet_id, values_list):
             store_name,           # H: Store name
             payment_method,       # I: Payment method
             charge_to,            # J: Charge to
-            comments              # K: Comments
+            comments,             # K: Comments
+            company               # L: Company
         ]
         
         # Log full details of the final values for debugging

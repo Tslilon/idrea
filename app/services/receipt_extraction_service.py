@@ -87,9 +87,13 @@ RECEIPT_SCHEMA = {
         "date": {
             "type": "string",
             "description": "The date of the transaction in DD/MM/YYYY format if available"
+        },
+        "company": {
+            "type": "string",
+            "description": "The paying company from the closed list: NADLAN VRGN HOLDINGS SL, DILIGENTE RE MANAGEMENT SL, NADLAN ROSENFELD. Only assign if clearly identifiable from receipt text (e.g., NADLAN appears). Leave empty if uncertain."
         }
     },
-    "required": ["what", "store_name", "total_amount", "iva", "date"],
+    "required": ["what", "store_name", "total_amount", "iva", "date", "company"],
     "additionalProperties": False
 }
 
@@ -100,6 +104,7 @@ Analyze this receipt image and extract the following key information:
 3. Total amount: The total amount paid (including any taxes)
 4. IVA/VAT amount: The Spanish VAT tax amount (if shown on receipt)
 5. Date: The date of the transaction (if shown on receipt)
+6. Company: The paying company (see details below)
 
 Important guidelines:
 - If a field isn't visible or doesn't exist, leave it empty
@@ -122,6 +127,17 @@ When extracting the date:
 - Use the format DD/MM/YYYY if possible
 - If multiple dates are shown, choose the transaction/purchase date
 - If no date is visible, leave this field empty
+
+When extracting the company:
+- Look for text on the receipt that indicates the paying company
+- Only select from this exact list: "NADLAN VRGN HOLDINGS SL", "DILIGENTE RE MANAGEMENT SL", "NADLAN ROSENFELD"
+- Be conservative: only assign a company if it's clearly identifiable
+- Examples of clear identifiers:
+  * If "NADLAN" appears anywhere → could be "NADLAN VRGN HOLDINGS SL" or "NADLAN ROSENFELD"
+  * If "DILIGENTE" appears → likely "DILIGENTE RE MANAGEMENT SL"
+  * If "ROSENFELD" appears → likely "NADLAN ROSENFELD"
+- If uncertain or no clear company identifier is found, leave this field empty
+- Use the exact company name from the list above
 
 Be precise and accurate in your extraction.
 """
@@ -294,6 +310,13 @@ def format_extracted_details_for_whatsapp(details):
     store_name = details.get("store_name", "")
     message.append(f"Store name: {store_name}")
     
+    # Company (if available)
+    company = details.get("company", "")
+    if company:
+        message.append(f"Company: {company}")
+    else:
+        message.append("Company: (not identified)")
+    
     # Payment Method (if available)
     payment_method = details.get("payment_method", "")
     if payment_method:
@@ -406,7 +429,7 @@ def prepare_for_google_sheets(details):
         formatted_date = datetime.now().strftime('%Y-%m-%d %H:%M')
     
     # Create values array in EXACTLY the order expected by the spreadsheet
-    # [when, who, what, amount, IVA, receipt, store name, payment method, charge to, comments]
+    # [when, who, what, amount, IVA, receipt, store name, payment method, charge to, comments, company]
     # Number is added by append_to_sheet
     final_values = [
         formatted_date,                                # when
@@ -418,7 +441,8 @@ def prepare_for_google_sheets(details):
         details.get("store_name", ""),                 # store name
         details.get("payment_method", ""),             # payment method
         details.get("charge_to", ""),                  # charge to
-        details.get("comments", "")                    # comments
+        details.get("comments", ""),                   # comments
+        details.get("company", "")                     # company
     ]
     
     # Add receipt_number as the last element if it exists

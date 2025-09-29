@@ -16,6 +16,7 @@ class ReceiptDetails(BaseModel):
     store_name: str
     total_amount: str
     iva: Optional[str] = None
+    company: Optional[str] = None
 
 # Path to the example receipt image
 IMAGE_PATH = "example_receipt.jpg"
@@ -68,7 +69,8 @@ def extract_receipt_details_with_schema():
             "what": {"type": "string"},
             "store_name": {"type": "string"},
             "total_amount": {"type": "string"},
-            "iva": {"type": "string"}
+            "iva": {"type": "string"},
+            "company": {"type": "string"}
         },
         "required": ["what", "store_name", "total_amount"]
     }
@@ -84,6 +86,7 @@ def extract_receipt_details_with_schema():
                     - store_name: The name of the store or business that issued the receipt
                     - total_amount: The total amount paid (as a string)
                     - iva: The VAT/IVA tax amount (if available, as a string)
+                    - company: The paying company from the closed list: NADLAN VRGN HOLDINGS SL, DILIGENTE RE MANAGEMENT SL, NADLAN ROSENFELD (only if clearly identifiable)
                     
                     IMPORTANT: The JSON response MUST contain the fields 'what', 'store_name', and 'total_amount'.
                     Return the extracted information in a flat JSON structure, not nested under other objects.

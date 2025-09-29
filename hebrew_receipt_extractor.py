@@ -65,6 +65,10 @@ RECEIPT_SCHEMA = {
         "notes": {
             "type": "string",
             "description": "Any additional notes or comments about the receipt"
+        },
+        "company": {
+            "type": "string",
+            "description": "The paying company from the closed list: NADLAN VRGN HOLDINGS SL, DILIGENTE RE MANAGEMENT SL, NADLAN ROSENFELD. Only assign if clearly identifiable from receipt text (e.g., nadlan appears). Leave empty if uncertain."
         }
     },
     "required": ["vendor_name", "amount", "date"],
@@ -81,6 +85,7 @@ Analyze this receipt image and extract the following key information in Hebrew:
 4. סכום (Amount): The total amount paid (including any taxes)
 5. תאריך (Date): The date of the transaction
 6. היערות (Notes): Any additional relevant information or notes
+7. חברה (Company): The paying company (see details below)
 
 Important guidelines:
 - Extract the text exactly as shown on the receipt, including Hebrew text
@@ -89,6 +94,17 @@ Important guidelines:
 - For amounts, include the currency symbol if shown
 - For dates, maintain the format as shown on the receipt
 - These receipts are primarily in Hebrew - please extract text in its original Hebrew form
+
+When extracting the company:
+- Look for text on the receipt that indicates the paying company
+- Only select from this exact list: "NADLAN VRGN HOLDINGS SL", "DILIGENTE RE MANAGEMENT SL", "NADLAN ROSENFELD"
+- Be conservative: only assign a company if it's clearly identifiable
+- Examples of clear identifiers:
+  * If "NADLAN" appears anywhere → could be "NADLAN VRGN HOLDINGS SL" or "NADLAN ROSENFELD"
+  * If "DILIGENTE" appears → likely "DILIGENTE RE MANAGEMENT SL"
+  * If "ROSENFELD" appears → likely "NADLAN ROSENFELD"
+- If uncertain or no clear company identifier is found, leave this field empty
+- Use the exact company name from the list above
 
 Be precise and accurate in your extraction. Do not translate Hebrew text to English.
 """
@@ -201,7 +217,8 @@ def extract_from_image(image_path: str) -> Tuple[Optional[Dict], Optional[str]]:
                 "מספר קבלה/חשבונית": result_json.get("receipt_number", ""),
                 "סכום": result_json.get("amount", ""),
                 "תאריך": result_json.get("date", ""),
-                "היערות": result_json.get("notes", "")
+                "היערות": result_json.get("notes", ""),
+                "חברה": result_json.get("company", "")
             }
             
             return mapped_result, None

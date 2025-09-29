@@ -35,7 +35,7 @@ def test_prepare_for_google_sheets():
     # Expected columns in order
     expected_columns = [
         "when", "who", "what", "amount", "IVA", "receipt", 
-        "store name", "payment method", "charge to", "comments"
+        "store name", "payment method", "charge to", "comments", "company"
     ]
     
     print("\nExpected columns mapping:")

@@ -66,7 +66,8 @@ Comments:"""
         "store_name",
         "payment_method",
         "charge_to",
-        "comments"
+        "comments",
+        "company"
     ]
     
     print("\nVerifying field order:")
