@@ -690,6 +690,7 @@ def process_text_message(text, name, creds, sender_waid):
                 "_(leave empty for today's date, or use 'yesterday', or DD/MM/YYYY)_\n"
                 "Receipt: yes\n"
                 "Store name: \n"
+                "Company: \n"
                 "Payment method: \n"
                 "Charge to: \n"
                 "Comments: \n\n"
@@ -1052,7 +1053,7 @@ def append_to_sheet(credentials, sheet_id, values_list):
         logging.info(f"  IVA: {iva}")
         
         # Check if receipt_number is provided in the values list (last element if available)
-        stored_receipt_number = values_list[10] if len(values_list) > 10 else None
+        stored_receipt_number = values_list[11] if len(values_list) > 11 else None
         
         # Get the next receipt number or use the stored one if available
         if stored_receipt_number:

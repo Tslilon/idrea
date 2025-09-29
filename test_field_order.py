@@ -28,6 +28,7 @@ IVA (euros):
 When: 20/04/2024
 Receipt: yes
 Store name: 
+Company: NADLAN VRGN HOLDINGS SL
 Payment method: 
 Charge to: 
 Comments:"""
@@ -87,7 +88,7 @@ Comments:"""
             # Create a mock service function for append
             
             # Trace through how append_to_sheet would process the values
-            if len(formatted_values) >= 10:
+            if len(formatted_values) >= 11:
                 when_date = formatted_values[0]
                 who = formatted_values[1]
                 what = formatted_values[2]
@@ -113,10 +114,11 @@ Comments:"""
                     amount,
                     iva,
                     receipt_value,
-                    formatted_values[6] if len(formatted_values) > 6 else "",
-                    formatted_values[7] if len(formatted_values) > 7 else "",
-                    formatted_values[8] if len(formatted_values) > 8 else "",
-                    formatted_values[9] if len(formatted_values) > 9 else ""
+                    formatted_values[6] if len(formatted_values) > 6 else "",  # store_name
+                    formatted_values[7] if len(formatted_values) > 7 else "",  # payment_method
+                    formatted_values[8] if len(formatted_values) > 8 else "",  # charge_to
+                    formatted_values[9] if len(formatted_values) > 9 else "",  # comments
+                    formatted_values[10] if len(formatted_values) > 10 else "" # company
                 ]
                 print(f"  {final_values}")
         else:

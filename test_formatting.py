@@ -21,6 +21,7 @@ def test_prepare_for_google_sheets():
         "payment_method": "",
         "charge_to": "",
         "comments": "",
+        "company": "NADLAN VRGN HOLDINGS SL",
         "when": "20/04/2024"  # This is the date field
     }
     
@@ -79,7 +80,7 @@ def simulate_append_to_sheet(values_list):
     # Expected columns with receipt number
     expected_columns = [
         "number", "when", "who", "what", "amount", "IVA", "receipt", 
-        "store name", "payment method", "charge to", "comments"
+        "store name", "payment method", "charge to", "comments", "company"
     ]
     
     print("\nFinal columns mapping:")
