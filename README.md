@@ -21,6 +21,7 @@ The iDrea WhatsApp bot is designed to help users efficiently manage and process 
      - Amount
      - VAT/IVA
      - Store name
+     - Company
      - Payment method
      - Charge to department
      - Additional comments
