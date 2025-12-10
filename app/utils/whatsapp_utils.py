@@ -51,7 +51,7 @@ def update_admins(update_text, senders_number):
     # try:
     admins = os.getenv("RECIPIENT_WAID")
     admins = admins.split(",")
-    print(admins)
+    logging.debug(f"Notifying admins: {admins}")
     for admin in admins:
         data_admin = get_text_message_input(admin, update_text)
         if admin != senders_number:
@@ -889,7 +889,7 @@ def refresh_access_token(refresh_token):
         new_tokens = response.json()
         return new_tokens['access_token'], new_tokens.get('refresh_token', refresh_token)
     else:
-        print(f"Failed to refresh token: {response.content}")
+        logging.error(f"Failed to refresh token: {response.content}")
         return None, None
 
 

@@ -35,5 +35,8 @@ USER appuser
 # Expose port
 EXPOSE 8080
 
-# Run the application
-CMD ["python", "run.py"]
+# Run with Gunicorn for production stability
+# - 2 workers for handling concurrent requests
+# - 120s timeout for long-running receipt processing
+# - Auto-restart workers after 1000 requests to prevent memory leaks
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120", "--max-requests", "1000", "--max-requests-jitter", "50", "--access-logfile", "-", "--error-logfile", "-", "run:app"]

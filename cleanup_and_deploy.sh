@@ -311,7 +311,7 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
         echo "You can view logs with: docker logs nadlan-bot"
         echo "Or view persistent logs with: tail -f \$LOG_FILE"
     else
-        # Run without persistent logging
+        # Run without persistent logging but with Docker log limits
         docker run -d \
           --name nadlan-bot \
           --restart unless-stopped \
@@ -319,6 +319,9 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
           -v ~/deployment/idrea/.env:/app/.env \
           -v ~/deployment/idrea/data:/app/data \
           -v ~/deployment/idrea/token.json:/app/token.json \
+          --log-driver json-file \
+          --log-opt max-size=50m \
+          --log-opt max-file=2 \
           nadlan-bot:latest
     fi
     
