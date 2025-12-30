@@ -17,93 +17,51 @@ os.environ.pop("http_proxy", None)
 os.environ.pop("https_proxy", None)
 
 import requests
-from openai import OpenAI
 from PIL import Image
+from pydantic import BaseModel, Field
+
+# Google Gemini imports
+from google import genai
+from google.genai import types
+
 try:
     from pdf2image import convert_from_bytes
 except ImportError:
     logging.warning("pdf2image not available - PDF processing will be disabled")
     convert_from_bytes = None
 
-# Initialize OpenAI client - moved to function to avoid initialization at module level
-def get_openai_client():
-    # Print the OpenAI SDK version for debugging
-    import openai
-    import inspect
-    import httpx
-    logging.info(f"Using OpenAI SDK version: {openai.__version__}")
-    
-    # Use the proper initialization method based on the OpenAI SDK version
-    try:
-        # For newer versions (1.x.x) - create a client with the correct parameters
-        # Create an httpx client with the correct proxy parameter (not proxies)
-        http_client = httpx.Client(timeout=60.0)
-        
-        # Initialize the OpenAI client with the http_client
-        client = OpenAI(
-            api_key=os.getenv("OPENAI_API_KEY"),
-            http_client=http_client
-        )
-        logging.info(f"Successfully created OpenAI client with custom HTTP client")
-        return client
-    except Exception as e:
-        logging.error(f"Error initializing OpenAI client: {str(e)}")
-        # Fallback for older versions or if the above fails
-        try:
-            # Try the simplest possible initialization
-            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            logging.info(f"Successfully created OpenAI client with fallback")
-            return client
-        except Exception as e2:
-            logging.error(f"Fallback method also failed: {str(e2)}")
-            raise RuntimeError(f"Could not initialize OpenAI client: {str(e)}, then: {str(e2)}")
-
-# OpenAI API configuration
-OPENAI_MODEL = "gpt-5.1"  # Using gpt-5.1 for better image analysis
-OPENAI_MAX_TOKENS = 4096  # Set token limit based on complexity of receipts
-OPENAI_TEMPERATURE = 0.0  # Use 0 temperature for deterministic outputs
+# Gemini API configuration
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyB1vs79c1FvsvPIY0SlrihUhw4Xwp359NU")
+GEMINI_MODEL = "gemini-3-flash-preview"  # Using Gemini 3 Flash for image analysis
 EXTRACTION_DELAY = 0.5  # Add delay between extraction attempts if needed
 
-# Updated schema to include the "what" field, invoice_number, and supplier_id
-RECEIPT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "what": {
-            "type": "string",
-            "description": "Concise description of the purchase or product (what was bought) in English"
-        },
-        "store_name": {
-            "type": "string",
-            "description": "The name of the store or vendor as shown on the receipt"
-        },
-        "total_amount": {
-            "type": "string",
-            "description": "The total amount paid"
-        },
-        "iva": {
-            "type": "string",
-            "description": "The VAT/IVA tax amount"
-        },
-        "date": {
-            "type": "string",
-            "description": "The date of the transaction in DD/MM/YYYY format if available"
-        },
-        "company": {
-            "type": "string",
-            "description": "The paying company of the client from the closed list: NADLAN VRGN HOLDINGS SL, DILIGENTE RE MANAGEMENT SL, NADLAN ROSENFELD. Only assign if clearly identifiable from receipt text (e.g., NADLAN appears). Leave empty if uncertain."
-        },
-        "invoice_number": {
-            "type": "string",
-            "description": "The invoice or receipt number as shown on the document (e.g., Factura No., Invoice #, Num. Factura)"
-        },
-        "supplier_id": {
-            "type": "string",
-            "description": "The supplier/vendor tax ID (CIF/NIF) - typically a letter followed by numbers (e.g., B12345678) found near the vendor name"
-        }
-    },
-    "required": ["what", "store_name", "total_amount", "iva", "date", "company", "invoice_number", "supplier_id"],
-    "additionalProperties": False
-}
+# Pydantic model for Gemini structured output
+class ReceiptDetails(BaseModel):
+    """Schema for receipt extraction structured output."""
+    what: str = Field(default="", description="Concise description of the purchase or product (what was bought) in English")
+    store_name: str = Field(default="", description="The name of the store or vendor as shown on the receipt")
+    total_amount: str = Field(default="", description="The total amount paid")
+    iva: str = Field(default="", description="The VAT/IVA tax amount")
+    date: str = Field(default="", description="The date of the transaction in DD/MM/YYYY format if available")
+    company: str = Field(default="", description="The paying company from the closed list: NADLAN VRGN HOLDINGS SL, DILIGENTE RE MANAGEMENT SL, NADLAN ROSENFELD")
+    invoice_number: str = Field(default="", description="The invoice or receipt number as shown on the document")
+    supplier_id: str = Field(default="", description="The supplier/vendor tax ID (CIF/NIF)")
+
+
+# Initialize Gemini client - moved to function to avoid initialization at module level
+def get_gemini_client():
+    """Initialize and return a Google Gemini client."""
+    api_key = GEMINI_API_KEY
+    if not api_key:
+        raise ValueError("Gemini API key not configured. Set GEMINI_API_KEY environment variable.")
+    
+    try:
+        client = genai.Client(api_key=api_key)
+        logging.info("Successfully created Gemini client")
+        return client
+    except Exception as e:
+        logging.error(f"Error initializing Gemini client: {str(e)}")
+        raise RuntimeError(f"Could not initialize Gemini client: {str(e)}")
 
 EXTRACTION_PROMPT = """
 Analyze this receipt image and extract the following key information:
@@ -238,7 +196,7 @@ def extract_receipt_details(file_content, content_type="image"):
                 return None, "PDF processing not available"
                 
         else:  # Default to image
-            # Optimize image before sending to OpenAI
+            # Optimize image before sending to Gemini
             try:
                 with Image.open(BytesIO(file_content)) as img:
                     # Resize large images to save bandwidth
@@ -497,7 +455,7 @@ def prepare_for_google_sheets(details):
 
 def extract_from_image(base64_image):
     """
-    Extract receipt details from a base64-encoded image using OpenAI's Vision API.
+    Extract receipt details from a base64-encoded image using Google Gemini's Vision API.
     
     Args:
         base64_image: Base64-encoded image data
@@ -506,57 +464,56 @@ def extract_from_image(base64_image):
         Dictionary of extracted receipt details, or None if extraction failed and an error message
     """
     try:
-        client = get_openai_client()
+        client = get_gemini_client()
         
-        # Create the request to the OpenAI API with the image and structured output
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=OPENAI_MAX_TOKENS,
-            temperature=OPENAI_TEMPERATURE,
-            messages=[
-                {"role": "system", "content": "Extract receipt details and return as JSON."},
-                {
-                    "role": "user", 
-                    "content": [
-                        {"type": "text", "text": EXTRACTION_PROMPT},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            }
-                        }
-                    ]
-                }
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "ReceiptDetails",
-                    "strict": True,
-                    "schema": RECEIPT_SCHEMA
-                }
-            }
-        )
+        # Decode base64 to bytes and create PIL Image
+        image_bytes = base64.b64decode(base64_image)
+        image = Image.open(io.BytesIO(image_bytes))
         
-        # Extract and parse the JSON from the API response
-        result_text = response.choices[0].message.content
-        
-        # Log the response content for debugging
-        logging.info(f"OpenAI API response content (first 200 chars): {result_text[:200]}...")
+        # Log extraction attempt
+        logging.info(f"Extracting receipt details using Gemini model: {GEMINI_MODEL}")
         
         try:
-            # Parse the JSON response
-            result_json = json.loads(result_text)
+            # Use generate_content with structured output config
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=[
+                    EXTRACTION_PROMPT,
+                    image,
+                ],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=ReceiptDetails,
+                ),
+            )
             
-            # Log the parsed JSON for debugging
-            logging.info(f"Complete parsed JSON from OpenAI: {json.dumps(result_json, indent=2, ensure_ascii=False)}")
+            # Access parsed response - the SDK automatically validates against the Pydantic model
+            if hasattr(response, 'parsed') and response.parsed is not None:
+                parsed: ReceiptDetails = response.parsed
+                result_json = parsed.model_dump()
+                logging.info(f"Gemini parsed response: {json.dumps(result_json, indent=2, ensure_ascii=False)}")
+                return result_json, None
             
-            # Return the validated JSON (schema is enforced by the API)
-            return result_json, None
+            # Fallback: try to parse text response as JSON
+            if hasattr(response, 'text') and response.text:
+                logging.info(f"Gemini API response text (first 200 chars): {response.text[:200]}...")
+                try:
+                    result_json = json.loads(response.text)
+                    # Validate with Pydantic
+                    parsed = ReceiptDetails(**result_json)
+                    result_json = parsed.model_dump()
+                    logging.info(f"Complete parsed JSON from Gemini: {json.dumps(result_json, indent=2, ensure_ascii=False)}")
+                    return result_json, None
+                except (json.JSONDecodeError, ValueError) as e:
+                    logging.error(f"Failed to parse JSON response: {e}\nRaw: {response.text}")
+                    return None, f"Invalid JSON response from Gemini: {e}"
             
-        except json.JSONDecodeError:
-            logging.error(f"Failed to parse JSON response: {result_text}")
-            return None, "Invalid JSON response from OpenAI"
+            logging.error("No response content from Gemini")
+            return None, "No response content from Gemini"
+            
+        except Exception as e:
+            logging.error(f"Gemini API error: {str(e)}")
+            return None, f"Gemini API error: {str(e)}"
             
     except Exception as e:
         logging.error(f"Error in extract_from_image: {str(e)}")
