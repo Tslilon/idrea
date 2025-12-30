@@ -38,7 +38,11 @@ class ReceiptDetails(BaseModel):
 # Test client initialization
 print("2. Testing Gemini client initialization...")
 try:
-    api_key = "AIzaSyB1vs79c1FvsvPIY0SlrihUhw4Xwp359NU"
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        print("   ERROR: GEMINI_API_KEY environment variable not set")
+        print("   Add it to .env file: GEMINI_API_KEY=your_key_here")
+        sys.exit(1)
     client = genai.Client(api_key=api_key)
     print("   Client created successfully!")
 except Exception as e:

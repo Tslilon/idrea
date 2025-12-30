@@ -31,7 +31,7 @@ except ImportError:
     convert_from_bytes = None
 
 # Gemini API configuration
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyB1vs79c1FvsvPIY0SlrihUhw4Xwp359NU")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = "gemini-3-flash-preview"  # Using Gemini 3 Flash for image analysis
 EXTRACTION_DELAY = 0.5  # Add delay between extraction attempts if needed
 
