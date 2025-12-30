@@ -22,6 +22,8 @@ def test_prepare_for_google_sheets():
         "charge_to": "",
         "comments": "",
         "company": "NADLAN VRGN HOLDINGS SL",
+        "invoice_number": "INV-12345",
+        "supplier_id": "B87654321",
         "when": "20/04/2024"  # This is the date field
     }
     
@@ -36,7 +38,8 @@ def test_prepare_for_google_sheets():
     # Expected columns in order
     expected_columns = [
         "when", "who", "what", "amount", "IVA", "receipt", 
-        "store name", "payment method", "charge to", "comments", "company"
+        "store name", "payment method", "charge to", "comments", "company", 
+        "invoice number", "supplier id"
     ]
     
     print("\nExpected columns mapping:")
@@ -80,7 +83,8 @@ def simulate_append_to_sheet(values_list):
     # Expected columns with receipt number
     expected_columns = [
         "number", "when", "who", "what", "amount", "IVA", "receipt", 
-        "store name", "payment method", "charge to", "comments", "company"
+        "store name", "payment method", "charge to", "comments", "company",
+        "invoice number", "supplier id"
     ]
     
     print("\nFinal columns mapping:")

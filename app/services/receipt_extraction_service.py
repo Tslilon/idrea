@@ -59,12 +59,12 @@ def get_openai_client():
             raise RuntimeError(f"Could not initialize OpenAI client: {str(e)}, then: {str(e2)}")
 
 # OpenAI API configuration
-OPENAI_MODEL = "gpt-4o"  # Using gpt-4o for better image analysis
+OPENAI_MODEL = "gpt-5.1"  # Using gpt-5.1 for better image analysis
 OPENAI_MAX_TOKENS = 4096  # Set token limit based on complexity of receipts
 OPENAI_TEMPERATURE = 0.0  # Use 0 temperature for deterministic outputs
 EXTRACTION_DELAY = 0.5  # Add delay between extraction attempts if needed
 
-# Updated schema to include the "what" field
+# Updated schema to include the "what" field, invoice_number, and supplier_id
 RECEIPT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -91,9 +91,17 @@ RECEIPT_SCHEMA = {
         "company": {
             "type": "string",
             "description": "The paying company of the client from the closed list: NADLAN VRGN HOLDINGS SL, DILIGENTE RE MANAGEMENT SL, NADLAN ROSENFELD. Only assign if clearly identifiable from receipt text (e.g., NADLAN appears). Leave empty if uncertain."
+        },
+        "invoice_number": {
+            "type": "string",
+            "description": "The invoice or receipt number as shown on the document (e.g., Factura No., Invoice #, Num. Factura)"
+        },
+        "supplier_id": {
+            "type": "string",
+            "description": "The supplier/vendor tax ID (CIF/NIF) - typically a letter followed by numbers (e.g., B12345678) found near the vendor name"
         }
     },
-    "required": ["what", "store_name", "total_amount", "iva", "date", "company"],
+    "required": ["what", "store_name", "total_amount", "iva", "date", "company", "invoice_number", "supplier_id"],
     "additionalProperties": False
 }
 
@@ -105,6 +113,8 @@ Analyze this receipt image and extract the following key information:
 4. IVA/VAT amount: The Spanish VAT tax amount (if shown on receipt)
 5. Date: The date of the transaction (if shown on receipt)
 6. Company: The paying company, the client, do not confuse this with the store name (see details below)
+7. Invoice number: The invoice or receipt number
+8. Supplier ID: The vendor/supplier tax ID (CIF/NIF)
 
 Important guidelines:
 - If a field isn't visible or doesn't exist, leave it empty
@@ -117,8 +127,8 @@ When extracting the "what" field:
 - If not clearly visible, infer from context or mark as "unknown"
 
 When extracting the store name:
-- Use the **issuer/sender of the receipt** (often shown under “Nombre” or with NIF/CIF, e.g. vendor or business name)
-- Do NOT take the “cliente” or “client” section (where NADLAN / DILIGENTE / ROSENFELD may appear). Those belong only in the "company" field.
+- Use the **issuer/sender of the receipt** (often shown under "Nombre" or with NIF/CIF, e.g. vendor or business name)
+- Do NOT take the "cliente" or "client" section (where NADLAN / DILIGENTE / ROSENFELD may appear). Those belong only in the "company" field.
 - Don't include slogans or addresses
 
 When extracting amounts:
@@ -130,7 +140,7 @@ When extracting the date:
 - If no date is visible, leave this field empty
 
 When extracting the company:
-- Look specifically in the “cliente” / “client” / billing section for the paying company (the client)
+- Look specifically in the "cliente" / "client" / billing section for the paying company (the client)
 - Only select from this exact list: "NADLAN VRGN HOLDINGS SL", "DILIGENTE RE MANAGEMENT SL", "NADLAN ROSENFELD"
 - Be conservative: only assign a company if it's clearly identifiable
 - Examples of clear identifiers:
@@ -139,6 +149,18 @@ When extracting the company:
   * If "ROSENFELD" appears → likely "NADLAN ROSENFELD"
 - If uncertain or no clear company identifier is found, leave this field empty
 - Use the exact company name from the list above
+
+When extracting the invoice number:
+- Look for labels like "Factura No.", "Invoice #", "Num. Factura", "N. Factura", "Recibo No.", etc.
+- Extract the number/code exactly as shown
+- If no invoice number is visible, leave this field empty
+
+When extracting the supplier ID (CIF/NIF):
+- Look for the vendor's tax identification number near the vendor/store name section
+- Usually labeled as "CIF", "NIF", "N.I.F.", "C.I.F.", or appears near the vendor address
+- Typically format is a letter + 8 digits (e.g., B12345678) but can vary
+- Do NOT use the client's CIF - only the vendor/supplier CIF
+- If no supplier ID is visible, leave this field empty
 
 Be precise and accurate in your extraction.
 """
@@ -318,6 +340,20 @@ def format_extracted_details_for_whatsapp(details):
     else:
         message.append("Company: (not identified)")
     
+    # Invoice number (if available)
+    invoice_number = details.get("invoice_number", "")
+    if invoice_number:
+        message.append(f"Invoice number: {invoice_number}")
+    else:
+        message.append("Invoice number: (not found)")
+    
+    # Supplier ID (if available)
+    supplier_id = details.get("supplier_id", "")
+    if supplier_id:
+        message.append(f"Supplier ID: {supplier_id}")
+    else:
+        message.append("Supplier ID: (not found)")
+    
     # Payment Method (if available)
     payment_method = details.get("payment_method", "")
     if payment_method:
@@ -430,20 +466,22 @@ def prepare_for_google_sheets(details):
         formatted_date = datetime.now().strftime('%Y-%m-%d %H:%M')
     
     # Create values array in EXACTLY the order expected by the spreadsheet
-    # [when, who, what, amount, IVA, receipt, store name, payment method, charge to, comments, company]
+    # [when, who, what, amount, IVA, receipt, store name, payment method, charge to, comments, company, invoice_number, supplier_id]
     # Number is added by append_to_sheet
     final_values = [
-        formatted_date,                                # when
-        sender_name,                                   # who
-        details.get("what", ""),                       # what
-        details.get("total_amount", details.get("amount", "")),  # amount
-        details.get("iva", ""),                        # IVA
-        details.get("has_receipt", "yes"),             # receipt (use user value or default to yes)
-        details.get("store_name", ""),                 # store name
-        details.get("payment_method", ""),             # payment method
-        details.get("charge_to", ""),                  # charge to
-        details.get("comments", ""),                   # comments
-        details.get("company", "")                     # company
+        formatted_date,                                # when (B)
+        sender_name,                                   # who (C)
+        details.get("what", ""),                       # what (D)
+        details.get("total_amount", details.get("amount", "")),  # amount (E)
+        details.get("iva", ""),                        # IVA (F)
+        details.get("has_receipt", "yes"),             # receipt (G) (use user value or default to yes)
+        details.get("store_name", ""),                 # store name (H)
+        details.get("payment_method", ""),             # payment method (I)
+        details.get("charge_to", ""),                  # charge to (J)
+        details.get("comments", ""),                   # comments (K)
+        details.get("company", ""),                    # company (L)
+        details.get("invoice_number", ""),             # invoice number (M)
+        details.get("supplier_id", "")                 # supplier ID (N)
     ]
     
     # Add receipt_number as the last element if it exists
@@ -473,7 +511,7 @@ def extract_from_image(base64_image):
         # Create the request to the OpenAI API with the image and structured output
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
-            max_tokens=OPENAI_MAX_TOKENS,
+            max_completion_tokens=OPENAI_MAX_TOKENS,
             temperature=OPENAI_TEMPERATURE,
             messages=[
                 {"role": "system", "content": "Extract receipt details and return as JSON."},

@@ -41,7 +41,9 @@ def append_to_sheet_with_fixed_columns(credentials, sheet_id, receipt_data):
             receipt_data.get("payment", ""), # I: Payment method
             receipt_data.get("charge", ""), # J: Charge to
             receipt_data.get("comments", ""), # K: Comments
-            receipt_data.get("company", "") # L: Company
+            receipt_data.get("company", ""), # L: Company
+            receipt_data.get("invoice_number", ""), # M: Invoice number
+            receipt_data.get("supplier_id", "") # N: Supplier ID
         ]
         
         logging.info(f"Final values being appended to Google Sheet: {values}")

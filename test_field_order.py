@@ -29,6 +29,8 @@ When: 20/04/2024
 Receipt: yes
 Store name: 
 Company: NADLAN VRGN HOLDINGS SL
+Invoice number: INV-12345
+Supplier ID: B87654321
 Payment method: 
 Charge to: 
 Comments:"""
@@ -68,7 +70,9 @@ Comments:"""
         "payment_method",
         "charge_to",
         "comments",
-        "company"
+        "company",
+        "invoice_number",
+        "supplier_id"
     ]
     
     print("\nVerifying field order:")
@@ -88,7 +92,7 @@ Comments:"""
             # Create a mock service function for append
             
             # Trace through how append_to_sheet would process the values
-            if len(formatted_values) >= 11:
+            if len(formatted_values) >= 13:
                 when_date = formatted_values[0]
                 who = formatted_values[1]
                 what = formatted_values[2]
@@ -114,11 +118,13 @@ Comments:"""
                     amount,
                     iva,
                     receipt_value,
-                    formatted_values[6] if len(formatted_values) > 6 else "",  # store_name
-                    formatted_values[7] if len(formatted_values) > 7 else "",  # payment_method
-                    formatted_values[8] if len(formatted_values) > 8 else "",  # charge_to
-                    formatted_values[9] if len(formatted_values) > 9 else "",  # comments
-                    formatted_values[10] if len(formatted_values) > 10 else "" # company
+                    formatted_values[6] if len(formatted_values) > 6 else "",   # store_name
+                    formatted_values[7] if len(formatted_values) > 7 else "",   # payment_method
+                    formatted_values[8] if len(formatted_values) > 8 else "",   # charge_to
+                    formatted_values[9] if len(formatted_values) > 9 else "",   # comments
+                    formatted_values[10] if len(formatted_values) > 10 else "", # company
+                    formatted_values[11] if len(formatted_values) > 11 else "", # invoice_number
+                    formatted_values[12] if len(formatted_values) > 12 else ""  # supplier_id
                 ]
                 print(f"  {final_values}")
         else:

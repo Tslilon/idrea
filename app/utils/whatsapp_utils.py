@@ -645,7 +645,9 @@ def process_text_message(text, name, creds, sender_waid):
         "when": "When",
         "date": "When",
         "comments": "Comments",
-        "company": "Company"
+        "company": "Company",
+        "invoice number": "Invoice number",
+        "supplier id": "Supplier ID"
     }
     
     # Check if this looks like a receipt form submission - use case-insensitive matching
@@ -691,6 +693,8 @@ def process_text_message(text, name, creds, sender_waid):
                 "Receipt: yes\n"
                 "Store name: \n"
                 "Company: \n"
+                "Invoice number: \n"
+                "Supplier ID: \n"
                 "Payment method: \n"
                 "Charge to: \n"
                 "Comments: \n\n"
@@ -728,7 +732,9 @@ def parse_manual_receipt_entry(text):
         "Date": "date",
         "When": "when",
         "What": "what",  # Fixed: Previously was "description"
-        "Company": "company"
+        "Company": "company",
+        "Invoice number": "invoice_number",
+        "Supplier ID": "supplier_id"
     }
     
     # Initialize result dictionary
@@ -1018,13 +1024,13 @@ def append_to_sheet(credentials, sheet_id, values_list):
         service = build('sheets', 'v4', credentials=credentials)
 
         # Specify the sheet and the range where data will be appended.
-        range = 'iDrea!A:K'  # Update this with your actual sheet name and range
+        range = 'iDrea!A:N'  # Update this with your actual sheet name and range (now includes invoice_number, supplier_id)
 
         # Log the received values list for debugging
         logging.info(f"Values to append to sheet: {values_list}")
         
         # The order from prepare_for_google_sheets is:
-        # [when, who, what, amount, IVA, receipt, store_name, payment_method, charge_to, comments, company]
+        # [when, who, what, amount, IVA, receipt, store_name, payment_method, charge_to, comments, company, invoice_number, supplier_id]
         
         # Ensure we have at least some values
         if not values_list:
@@ -1043,6 +1049,8 @@ def append_to_sheet(credentials, sheet_id, values_list):
         charge_to = values_list[8] if len(values_list) > 8 else ""
         comments = values_list[9] if len(values_list) > 9 else ""
         company = values_list[10] if len(values_list) > 10 else ""
+        invoice_number = values_list[11] if len(values_list) > 11 else ""
+        supplier_id = values_list[12] if len(values_list) > 12 else ""
         
         # Log extracted key values for debugging
         logging.info(f"Extracted key values from values_list:")
@@ -1053,7 +1061,8 @@ def append_to_sheet(credentials, sheet_id, values_list):
         logging.info(f"  IVA: {iva}")
         
         # Check if receipt_number is provided in the values list (last element if available)
-        stored_receipt_number = values_list[11] if len(values_list) > 11 else None
+        # Note: receipt_number is now at index 13 (after invoice_number and supplier_id)
+        stored_receipt_number = values_list[13] if len(values_list) > 13 else None
         
         # Get the next receipt number or use the stored one if available
         if stored_receipt_number:
@@ -1116,7 +1125,9 @@ def append_to_sheet(credentials, sheet_id, values_list):
             payment_method,       # I: Payment method
             charge_to,            # J: Charge to
             comments,             # K: Comments
-            company               # L: Company
+            company,              # L: Company
+            invoice_number,       # M: Invoice number
+            supplier_id           # N: Supplier ID
         ]
         
         # Log full details of the final values for debugging
