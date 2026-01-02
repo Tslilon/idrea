@@ -9,6 +9,10 @@ from typing import Dict, Optional, List, Any, Tuple
 from io import BytesIO
 import re
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Clear any proxy environment variables that might be causing issues
 os.environ.pop("HTTP_PROXY", None)
@@ -53,7 +57,11 @@ def get_gemini_client():
     """Initialize and return a Google Gemini client."""
     api_key = GEMINI_API_KEY
     if not api_key:
+        logging.error("GEMINI_API_KEY environment variable is not set!")
         raise ValueError("Gemini API key not configured. Set GEMINI_API_KEY environment variable.")
+    
+    # Log partial key for debugging (first 10 chars only for security)
+    logging.info(f"Initializing Gemini client with API key: {api_key[:10]}...")
     
     try:
         client = genai.Client(api_key=api_key)
