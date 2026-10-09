@@ -36,7 +36,7 @@ oauthlib==3.3.1
 ordered-set==4.1.0
 packaging==25.0
 pdf2image==1.16.3
-Pillow==10.1.0
+Pillow==12.3.0  # was 10.1.0 (security fixes; images and PDFs come from outside users)
 proto-plus==1.27.0
 protobuf==6.33.2
 pyasn1==0.6.1
