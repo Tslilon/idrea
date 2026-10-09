@@ -49,37 +49,37 @@ PALETTES = {
 PERSONAL_LINES = {
     "andrea": [
         "We hope that some day bots and AI will be as efficient as Andrea. 💙",
-        "Andrea, thank you for everything you do - this team is lucky to have you. ❤️",
-        "Andrea, you are the heart of this operation. With love from all of us. 💙",
+        "Another one filed by Andrea. The spreadsheet is visibly happier.",
+        "Andrea, the undisputed receipt champion of the team. 🏆",
     ],
     "pablo": [
         "Pablo strikes again. The receipts never stood a chance. 🎯",
-        "Filed by Pablo - neat, fast, and right on time.",
+        "Pablo! Fast, neat, and somehow always smiling. 😄",
     ],
     "sebastian": [
-        "Sebastian, smooth as ever. Receipt filed. 😎",
-        "Another tidy one from Sebastian. 👌",
+        "Sebastian, smooth as ever. 😎",
+        "Sebastian sends a receipt and the spreadsheet does a little dance. 💃",
     ],
     "juan": [
         "Juan, you make this look easy. ✅",
-        "Filed! Thanks, Juan - the spreadsheet salutes you. 🫡",
+        "Juan! The spreadsheet lights up every time you show up. ✨",
     ],
     "kalo": [
         "Kalo, you make this look easy. ✅",
     ],
     "maria": [
-        "María, thank you - beautifully filed. 🌸",
-        "Another one from María, right where it belongs. 📁",
+        "María! The spreadsheet missed you. 🌸",
+        "A receipt from María - the day just got better. ☀️",
     ],
     "barak": [
         "Barak, receipt received loud and clear. 📡",
-        "Filed and accounted for - thanks, Barak! 🙌",
+        "Barak sends a receipt and the whole spreadsheet stands up straight. 😄",
     ],
     "amir": [
         "Amir, rare and valuable - just like this receipt. 💎",
     ],
     "benjamin": [
-        "Benjamín, receipt safely filed. Gracias! 🙏",
+        "Benjamín! Long time no receipt. 👋",
     ],
     "tslil": [
         "The creator files a receipt. iDrea is honoured. 🤖✨",
@@ -124,7 +124,7 @@ KEYWORD_REPLIES = {
         "¡Buenas noches, {name}! 😴",
     ],
     "love": [
-        "Aww, {name}. I love you too - in a strictly professional, receipt-processing way. 💙",
+        "Aww, {name}. Love you too! 💙",
     ],
     "42": [
         "The answer to life, the universe and everything. Also a perfectly reasonable IVA amount. 🌌",
