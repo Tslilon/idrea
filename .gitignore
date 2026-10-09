@@ -107,3 +107,4 @@ environments/*/data/*.json
 environments/*/token.json
 environments/*/.env
 credentials.json
+.eval_cache/

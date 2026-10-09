@@ -36,8 +36,18 @@ except ImportError:
 
 # Gemini API configuration
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = "gemini-3-flash-preview"  # Using Gemini 3 Flash for image analysis
+# Override with the GEMINI_MODEL env var to switch models without a code change
+GEMINI_MODEL = os.getenv("GEMINI_MODEL") or "gemini-3.5-flash"
+# Fail before gunicorn's 120s worker timeout kills the request
+GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "75000"))
 EXTRACTION_DELAY = 0.5  # Add delay between extraction attempts if needed
+
+# PDFs are rendered at up to PDF_DPI, but never larger than PDF_MAX_PIXELS on the
+# longest side. Oversized pages (e.g. 30x43in "Save as PDF" output) otherwise
+# render to ~50MP bitmaps and get the worker OOM-killed.
+PDF_DPI = 200
+PDF_MAX_PIXELS = 2400
+PDF_MAX_PAGES = int(os.getenv("PDF_MAX_PAGES", "1"))
 
 # Pydantic model for Gemini structured output
 class ReceiptDetails(BaseModel):
@@ -60,11 +70,11 @@ def get_gemini_client():
         logging.error("GEMINI_API_KEY environment variable is not set!")
         raise ValueError("Gemini API key not configured. Set GEMINI_API_KEY environment variable.")
     
-    # Log partial key for debugging (first 10 chars only for security)
-    logging.info(f"Initializing Gemini client with API key: {api_key[:10]}...")
-    
     try:
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS),
+        )
         logging.info("Successfully created Gemini client")
         return client
     except Exception as e:
@@ -151,6 +161,35 @@ def preprocess_image(image: bytes) -> Image.Image:
         logging.error(f"Error preprocessing image: {str(e)}")
         raise
 
+def pdf_render_dpi(page_width_pts: float, page_height_pts: float) -> int:
+    """DPI that renders a page at PDF_DPI, capped so the longest side stays within PDF_MAX_PIXELS."""
+    longest_inches = max(page_width_pts, page_height_pts) / 72.0
+    if longest_inches <= 0:
+        return PDF_DPI
+    return max(36, min(PDF_DPI, int(PDF_MAX_PIXELS / longest_inches)))
+
+
+def render_pdf_pages(pdf_bytes: bytes, max_pages: int = 1) -> List[Image.Image]:
+    """Render the first max_pages pages of a PDF with a bounded memory footprint."""
+    from pdf2image import convert_from_bytes, pdfinfo_from_bytes
+
+    info = pdfinfo_from_bytes(pdf_bytes)
+    pages = min(int(info.get("Pages", 1) or 1), max(1, max_pages))
+    width_pts, height_pts = 612.0, 792.0  # Letter, if the size can't be read
+    size_match = re.match(r"\s*([\d.]+)\s*x\s*([\d.]+)", str(info.get("Page size", "")))
+    if size_match:
+        width_pts, height_pts = float(size_match.group(1)), float(size_match.group(2))
+    dpi = pdf_render_dpi(width_pts, height_pts)
+    if dpi < PDF_DPI:
+        logging.warning(f"Large PDF page ({width_pts:.0f}x{height_pts:.0f} pts), rendering at {dpi} dpi")
+    images = convert_from_bytes(pdf_bytes, dpi=dpi, first_page=1, last_page=pages)
+    # Pages can differ in size; make sure none exceeds the pixel budget
+    for img in images:
+        if max(img.size) > PDF_MAX_PIXELS * 1.5:
+            img.thumbnail((PDF_MAX_PIXELS, PDF_MAX_PIXELS))
+    return images
+
+
 def convert_pdf_to_images(pdf_bytes: bytes) -> List[Image.Image]:
     """Convert PDF file to a list of PIL Image objects."""
     if convert_from_bytes is None:
@@ -158,9 +197,7 @@ def convert_pdf_to_images(pdf_bytes: bytes) -> List[Image.Image]:
         return []
         
     try:
-        # Convert PDF directly from bytes to reduce disk I/O
-        images = convert_from_bytes(pdf_bytes, dpi=200)  # Reduced DPI to save memory
-        return images
+        return render_pdf_pages(pdf_bytes, PDF_MAX_PAGES)
     except Exception as e:
         logging.error(f"Error converting PDF to images: {str(e)}")
         return []
@@ -181,23 +218,21 @@ def extract_receipt_details(file_content, content_type="image"):
             # For PDFs, we need to convert to image first
             try:
                 # Import here to avoid dependency issues
-                from pdf2image import convert_from_bytes
-                
-                # Convert first page of PDF to image
-                images = convert_from_bytes(file_content, first_page=1, last_page=1)
+                images = render_pdf_pages(file_content, PDF_MAX_PAGES)
                 
                 if not images:
                     return None, "Failed to convert PDF to image"
                 
-                # Process the first page image
-                with BytesIO() as image_buffer:
-                    # Use JPEG format with reduced quality to save bandwidth
-                    images[0].save(image_buffer, format="JPEG", quality=70, optimize=True)
-                    image_buffer.seek(0)
-                    image_content = image_buffer.read()
+                page_contents = []
+                for page in images:
+                    with BytesIO() as image_buffer:
+                        # Use JPEG format with reduced quality to save bandwidth
+                        page.convert("RGB").save(image_buffer, format="JPEG", quality=70, optimize=True)
+                        page_contents.append(image_buffer.getvalue())
+                del images
                 
-                # Now extract from the image
-                return extract_from_image(base64.b64encode(image_content).decode())
+                # Now extract from the page image(s)
+                return extract_from_image([base64.b64encode(c).decode() for c in page_contents])
                 
             except ImportError as e:
                 logging.warning(f"PDF conversion failed due to missing dependencies: {str(e)}")
@@ -207,6 +242,8 @@ def extract_receipt_details(file_content, content_type="image"):
             # Optimize image before sending to Gemini
             try:
                 with Image.open(BytesIO(file_content)) as img:
+                    # Let JPEG decode at reduced scale when the source is huge
+                    img.draft("RGB", (3200, 3200))
                     # Resize large images to save bandwidth
                     max_size = 1600  # Max dimension
                     if max(img.size) > max_size:
@@ -466,7 +503,7 @@ def extract_from_image(base64_image):
     Extract receipt details from a base64-encoded image using Google Gemini's Vision API.
     
     Args:
-        base64_image: Base64-encoded image data
+        base64_image: Base64-encoded image data, or a list of them (one per page)
         
     Returns:
         Dictionary of extracted receipt details, or None if extraction failed and an error message
@@ -474,9 +511,9 @@ def extract_from_image(base64_image):
     try:
         client = get_gemini_client()
         
-        # Decode base64 to bytes and create PIL Image
-        image_bytes = base64.b64decode(base64_image)
-        image = Image.open(io.BytesIO(image_bytes))
+        # Decode base64 to bytes and create PIL Image(s)
+        encoded_pages = base64_image if isinstance(base64_image, list) else [base64_image]
+        images = [Image.open(io.BytesIO(base64.b64decode(page))) for page in encoded_pages]
         
         # Log extraction attempt
         logging.info(f"Extracting receipt details using Gemini model: {GEMINI_MODEL}")
@@ -485,10 +522,7 @@ def extract_from_image(base64_image):
             # Use generate_content with structured output config
             response = client.models.generate_content(
                 model=GEMINI_MODEL,
-                contents=[
-                    EXTRACTION_PROMPT,
-                    image,
-                ],
+                contents=[EXTRACTION_PROMPT, *images],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=ReceiptDetails,

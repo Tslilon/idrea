@@ -5,7 +5,10 @@ import json
 import requests
 import re
 import shelve
+import time
 import uuid
+import fcntl
+from contextlib import contextmanager
 from flask import request
 
 from flask import current_app, jsonify
@@ -19,6 +22,7 @@ from app.services.receipt_extraction_service import (
     format_extracted_details_for_whatsapp,
     prepare_for_google_sheets
 )
+from app.services import easter_eggs
 
 # Additional imports and code
 # from app.services.openai_service import generate_response
@@ -26,6 +30,91 @@ from app.services.receipt_extraction_service import (
 # from google_auth_oauthlib.flow import InstalledAppFlow
 # from google.auth.transport.requests import Request
 # from google.auth.exceptions import RefreshError
+
+
+# Persistent bot state lives in DATA_DIR, which is a mounted volume in production,
+# so pending receipts survive redeploys.
+DATA_DIR = os.getenv("DATA_DIR", "data")
+RECEIPTS_DB = os.path.join(DATA_DIR, "receipts_db")
+MESSAGE_LOG_DB = os.path.join(DATA_DIR, "message_log_db")
+RECEIPT_NUMBER_FILE = os.path.join(DATA_DIR, "latest_receipt_number.txt")
+STATE_LOCK_FILE = os.path.join(DATA_DIR, ".state.lock")
+
+# A WhatsApp message whose processing crashed this many times is not retried again
+MAX_MESSAGE_ATTEMPTS = 2
+# Meta redelivers a webhook it didn't get a 200 for; skip copies while the first is still running
+MESSAGE_IN_PROGRESS_SECONDS = 150
+MESSAGE_LOG_TTL_SECONDS = 7 * 24 * 3600
+
+COMPANIES = ["NADLAN VRGN HOLDINGS SL", "DILIGENTE RE MANAGEMENT SL", "NADLAN ROSENFELD"]
+
+EDIT_HELP_TEXT = (
+    "Reply with the fields you want to change, one per line, for example:\n\n"
+    "Amount: 42,50\n"
+    "When: 03/10/2026\n"
+    "Company: Diligente\n\n"
+    "Fields: What, Amount, IVA, When, Store name, Company, Invoice number, "
+    "Supplier ID, Payment method, Charge to, Comments"
+)
+
+BUTTON_CONFIRM_ID = "receipt_confirm"
+BUTTON_EDIT_ID = "receipt_edit"
+BUTTON_CANCEL_ID = "receipt_cancel"
+BUTTON_TEXT = {BUTTON_CONFIRM_ID: "confirm", BUTTON_EDIT_ID: "edit", BUTTON_CANCEL_ID: "cancel"}
+
+
+@contextmanager
+def state_lock():
+    """Serialize access to the shelve files across gunicorn workers (gdbm allows one writer)."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(STATE_LOCK_FILE, "a") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
+def begin_message_processing(message_id):
+    """
+    Record a delivery of message_id and decide what to do with it.
+
+    Returns "process", "duplicate" (already handled or still being handled),
+    or "give_up" (earlier attempts crashed; don't try again).
+    """
+    if not message_id:
+        return "process"
+    now = time.time()
+    with state_lock():
+        with shelve.open(MESSAGE_LOG_DB, writeback=False) as log_shelf:
+            for key in [k for k, v in log_shelf.items() if now - v.get("first_seen", now) > MESSAGE_LOG_TTL_SECONDS]:
+                del log_shelf[key]
+            entry = log_shelf.get(message_id)
+            if entry is None:
+                log_shelf[message_id] = {"first_seen": now, "started": now, "attempts": 1, "done": False}
+                return "process"
+            if entry.get("done"):
+                return "duplicate"
+            if now - entry.get("started", 0) < MESSAGE_IN_PROGRESS_SECONDS:
+                return "duplicate"
+            if entry.get("attempts", 0) >= MAX_MESSAGE_ATTEMPTS:
+                entry["done"] = True
+                log_shelf[message_id] = entry
+                return "give_up"
+            entry["attempts"] = entry.get("attempts", 0) + 1
+            entry["started"] = now
+            log_shelf[message_id] = entry
+            return "process"
+
+
+def finish_message_processing(message_id):
+    if not message_id:
+        return
+    with state_lock():
+        with shelve.open(MESSAGE_LOG_DB, writeback=False) as log_shelf:
+            entry = log_shelf.get(message_id, {"first_seen": time.time(), "attempts": 1})
+            entry["done"] = True
+            log_shelf[message_id] = entry
 
 
 def log_http_response(response):
@@ -58,6 +147,80 @@ def update_admins(update_text, senders_number):
             send_message(data_admin)
     # except:
     #     pass
+
+
+def get_button_message_input(recipient, body_text, buttons):
+    """Interactive message with up to 3 reply buttons, given as [(id, title), ...]."""
+    return json.dumps(
+        {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": recipient,
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "body": {"text": body_text},
+                "action": {
+                    "buttons": [
+                        {"type": "reply", "reply": {"id": button_id, "title": title}}
+                        for button_id, title in buttons
+                    ]
+                },
+            },
+        }
+    )
+
+
+def send_receipt_review(recipient, body_text, receipt_number=None):
+    """
+    Show receipt details with Confirm / Edit / Cancel buttons.
+    Typed replies ("yes", "Amount: 12,50", ...) keep working; if the button
+    message can't be sent, the same text is sent as a plain message.
+    """
+    buttons = [
+        (BUTTON_CONFIRM_ID, "✅ Confirm"),
+        (BUTTON_EDIT_ID, "✏️ Edit"),
+        (BUTTON_CANCEL_ID, "❌ Cancel"),
+    ]
+    footer = "Tap a button below, or reply with corrections like \"Amount: 42,50\"."
+    full_text = f"{body_text}\n\n{footer}"
+    if len(full_text) <= 1024:
+        response = send_message(get_button_message_input(recipient, full_text, buttons))
+    else:
+        send_message(get_text_message_input(recipient, body_text))
+        prompt = f"Save receipt #{receipt_number}?" if receipt_number else "Save this receipt?"
+        response = send_message(get_button_message_input(recipient, f"{prompt}\n\n{footer}", buttons))
+    if getattr(response, "status_code", None) != 200:
+        logging.warning("Button message failed, falling back to plain text")
+        send_message(get_text_message_input(
+            recipient,
+            f"{body_text}\n\n"
+            f"✅ To confirm, reply \"confirm\" or \"yes\".\n"
+            f"✏️ To correct a field, reply e.g. \"Amount: 42,50\".\n"
+            f"❌ To cancel, reply \"cancel\" or \"no\".",
+        ))
+
+
+def send_typing_indicator(message_id):
+    """Mark the incoming message as read and show "typing…" while we work. Best effort."""
+    if not message_id:
+        return
+    try:
+        response = requests.post(
+            f"https://graph.facebook.com/{os.getenv('VERSION')}/{os.getenv('PHONE_NUMBER_ID')}/messages",
+            json={
+                "messaging_product": "whatsapp",
+                "status": "read",
+                "message_id": message_id,
+                "typing_indicator": {"type": "text"},
+            },
+            headers={"Authorization": f"Bearer {os.getenv('ACCESS_TOKEN')}"},
+            timeout=5,
+        )
+        if response.status_code != 200:
+            logging.info(f"Typing indicator not sent: {response.status_code} {response.text[:200]}")
+    except requests.RequestException as e:
+        logging.info(f"Typing indicator not sent: {e}")
 
 
 def generate_response(message_body):
@@ -167,6 +330,44 @@ def process_whatsapp_message(message, phone_number_id):
         if not sender_waid.startswith("+"):
             sender_waid = f"+{sender_waid}"
         
+        message_id = message.get("id")
+        try:
+            decision = begin_message_processing(message_id)
+        except Exception as e:
+            # Never drop a message because the bookkeeping failed
+            logging.error(f"Message log unavailable, processing anyway: {str(e)}")
+            decision = "process"
+        if decision == "duplicate":
+            logging.info(f"Skipping repeated delivery of message {message_id}")
+            return
+        if decision == "give_up":
+            logging.error(f"Message {message_id} failed {MAX_MESSAGE_ATTEMPTS} times, not retrying")
+            data = get_text_message_input(
+                sender_waid,
+                "Sorry, I wasn't able to process that message. "
+                "Please try sending the receipt as a photo, or type the details manually.",
+            )
+            send_message(data)
+            update_admins(f"⚠️ A message from {sender_waid} could not be processed after {MAX_MESSAGE_ATTEMPTS} attempts.", sender_waid)
+            return
+
+        try:
+            _process_whatsapp_message(message, sender_waid)
+        finally:
+            try:
+                finish_message_processing(message_id)
+            except Exception as e:
+                logging.error(f"Could not record message {message_id} as processed: {str(e)}")
+
+    except Exception as e:
+        logging.error(f"Error processing WhatsApp message: {str(e)}")
+        return
+
+
+def _process_whatsapp_message(message, sender_waid):
+    try:
+        send_typing_indicator(message.get("id"))
+
         # Load credentials for Google services
         creds = load_credentials()
         if creds is None:
@@ -209,6 +410,21 @@ def process_whatsapp_message(message, phone_number_id):
         
         logging.info(f"Using name: {name} for sender: {sender_waid}")
         
+        # Button replies behave like the matching typed keyword
+        if message_type == "interactive":
+            button_id = message.get("interactive", {}).get("button_reply", {}).get("id")
+            message_type = "text"
+            message = {**message, "type": "text", "text": {"body": BUTTON_TEXT.get(button_id, "")}}
+
+        # Images sent "as a document" (to keep full quality) are still images
+        if message_type == "document" and message.get("document", {}).get("mime_type", "").startswith("image/"):
+            document = message["document"]
+            caption = document.get("caption", "").strip()
+            if caption == document.get("filename"):
+                caption = ""
+            message_type = "image"
+            message = {**message, "type": "image", "image": {"id": document["id"], "caption": caption}}
+
         # Process different message types
         if message_type == "text":
             # Handle text message
@@ -274,7 +490,7 @@ def get_document_url_from_whatsapp(document_id):
 
     try:
         logging.info(f"Fetching document URL for document ID: {document_id}")
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=30)
         
         if response.status_code == 200:
             document_data = response.json()
@@ -388,14 +604,19 @@ def process_text_message(text, name, creds, sender_waid):
             # Use prepare_for_google_sheets to get the values in the correct order
             update_data = prepare_for_google_sheets(stored_receipt)
             
+            # Write to Google Sheets
+            receipt_num = append_to_sheet(creds, sheet_id, update_data)
+            first_name = get_first_name(name)
+            if receipt_num is None:
+                # Keep the pending receipt so the user can simply try again
+                data = get_text_message_input(sender_waid, f"Sorry {first_name}, I couldn't save your receipt to the spreadsheet just now. Your details are kept - please reply \"confirm\" again in a minute.")
+                send_message(data)
+                return
+            
             # Remove the stored receipt
             delete_stored_receipt(sender_waid)
             
-            # Write to Google Sheets
-            receipt_num = append_to_sheet(creds, sheet_id, update_data)
-            
             # Send confirmation
-            first_name = get_first_name(name)
             confirm_message = f"Thank you {first_name}! I've saved your receipt details. Your receipt number is {receipt_num}."
             data = get_text_message_input(sender_waid, confirm_message)
             send_message(data)
@@ -403,6 +624,7 @@ def process_text_message(text, name, creds, sender_waid):
             # Update admins
             update_admins(f"Receipt #{receipt_num} confirmed by {name}", sender_waid)
             
+            easter_eggs.after_receipt_saved(sender_waid, name, stored_receipt, receipt_num)
             return
         else:
             # No stored receipt to confirm
@@ -451,6 +673,18 @@ def process_text_message(text, name, creds, sender_waid):
             send_message(data)
             return
     
+    if text_lower == "edit":
+        if stored_receipt:
+            data = get_text_message_input(sender_waid, EDIT_HELP_TEXT)
+        else:
+            data = get_text_message_input(sender_waid, "I don't have any pending receipt details to edit. Send a receipt photo or PDF to start.")
+        send_message(data)
+        return
+    
+    # Hidden replies to a few words (only when nothing is waiting for confirmation)
+    if not stored_receipt and easter_eggs.handle_keyword(text, sender_waid, name):
+        return
+    
     # Handling receipt image caption requests
     if text.isdigit():
         response = f"Looking for receipt #{text}..."
@@ -462,7 +696,7 @@ def process_text_message(text, name, creds, sender_waid):
     # Check if this is an edit request for an existing stored receipt
     if stored_receipt and not ":" in text:
         # Simple text without field markers - might be an update attempt
-        response = "If you want to update a specific field, please use the format 'Field: New Value', for example 'Amount: 42.50'"
+        response = f"You have a receipt waiting for confirmation. {EDIT_HELP_TEXT}"
         data = get_text_message_input(sender_waid, response)
         send_message(data)
         return
@@ -482,7 +716,13 @@ def process_text_message(text, name, creds, sender_waid):
                 
                 # Use our field normalization rules to get consistent field names
                 normalized_field = None
-                if "amount" in field_name:
+                if "invoice" in field_name:
+                    normalized_field = "invoice_number"
+                elif "supplier" in field_name or field_name in ["cif", "nif"]:
+                    normalized_field = "supplier_id"
+                elif "company" in field_name:
+                    normalized_field = "company"
+                elif "amount" in field_name:
                     normalized_field = "total_amount"
                 elif "iva" in field_name:
                     normalized_field = "iva"
@@ -588,9 +828,15 @@ def process_text_message(text, name, creds, sender_waid):
                                 logging.warning(f"Error parsing date: {str(e)}. Using current date.")
                                 field_value = ""  # This will make the system use the current date
                     
+                    elif normalized_field == "company":
+                        field_value = normalize_company(field_value)
+                    
                     # Only add non-empty values to updates
                     if field_value:
                         updates[normalized_field] = field_value
+                        if normalized_field == "when":
+                            # The extracted "date" takes precedence over "when", so update both
+                            updates["date"] = field_value
                         logging.info(f"Updating field {normalized_field} to {field_value}")
         
         # Update the stored receipt with the new values
@@ -604,28 +850,20 @@ def process_text_message(text, name, creds, sender_waid):
             updated_message = format_extracted_details_for_whatsapp(current_receipt)
             
             # Show what fields were updated
-            changes = [f"✓ {field.title().replace('_', ' ')}: {value}" for field, value in updates.items()]
+            changes = [f"✓ {field.title().replace('_', ' ')}: {value}" for field, value in updates.items() if field != "date"]
             update_confirmation = "Updated:\n" + "\n".join(changes)
             
             response = (
                 f"{update_confirmation}\n\n"
                 f"Updated receipt details:\n\n"
-                f"{updated_message}\n\n"
-                f"Reply \"yes\" or \"confirm\" to finalize or continue editing."
+                f"{updated_message}"
             )
-            data = get_text_message_input(sender_waid, response)
-            send_message(data)
+            send_receipt_review(sender_waid, response, current_receipt.get("receipt_number"))
             
             return
         else:
             # No valid fields found to update
-            response = (
-                f"I couldn't identify any fields to update. Please use this format:\n\n"
-                f"Payment method: [cash/card/transfer]\n"
-                f"Charge to: [personal/company/project]\n"
-                f"When: [today/yesterday/DD/MM/YYYY]\n"
-                f"Comments: [any additional notes]"
-            )
+            response = f"I couldn't identify any fields to update.\n\n{EDIT_HELP_TEXT}"
             data = get_text_message_input(sender_waid, response)
             send_message(data)
             
@@ -680,6 +918,9 @@ def process_text_message(text, name, creds, sender_waid):
         
         # Clean up any stored receipt details
         delete_stored_receipt(sender_waid)
+        
+        if receipt_num is not None:
+            easter_eggs.after_receipt_saved(sender_waid, name, parsed_data, receipt_num)
     else:
         # If it's not a form submission, send the form template
         logging.info(f"Sending form template to {sender_waid}")
@@ -705,6 +946,19 @@ def process_text_message(text, name, creds, sender_waid):
         response = send_message(data)
         logging.info(f"Template message response: {response.status_code}")
         logging.info(f"Template message response body: {response.text[:100]}")
+
+
+def normalize_company(value):
+    """Map a typed company name onto the official list when it clearly matches one entry."""
+    cleaned = value.strip()
+    lowered = cleaned.lower()
+    for company in COMPANIES:
+        if lowered == company.lower():
+            return company
+    matches = [c for c in COMPANIES if lowered and lowered in c.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    return cleaned
 
 
 def parse_manual_receipt_entry(text):
@@ -841,6 +1095,8 @@ def is_valid_whatsapp_message(message):
         return True
     elif msg_type == "document" and message.get("document"):
         return True
+    elif msg_type == "interactive" and message.get("interactive", {}).get("button_reply"):
+        return True
     
     return False
 
@@ -961,7 +1217,7 @@ def get_receipt_number(credentials, sheet_id):
             
             # Use a persistent file to track the latest assigned receipt number
             # This ensures numbers aren't reused even if receipts are cancelled
-            tracking_file = "latest_receipt_number.txt"
+            tracking_file = RECEIPT_NUMBER_FILE
             latest_tracked_number = 0
             
             # Read the latest tracked number from file
@@ -1168,7 +1424,7 @@ def get_image_url_from_whatsapp(image_id):
 
     try:
         logging.info(f"Fetching image URL for image ID: {image_id}")
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=30)
         
         if response.status_code == 200:
             image_data = response.json()
@@ -1223,17 +1479,17 @@ def store_extracted_receipt(wa_id, receipt_details, sender_name="User"):
     # Log final receipt details after modification
     logging.info(f"Storing receipt details (after modification): {modified_details}")
     
-    with shelve.open("receipts_db", writeback=True) as receipts_shelf:
+    with state_lock(), shelve.open(RECEIPTS_DB, writeback=True) as receipts_shelf:
         receipts_shelf[wa_id] = modified_details
 
 def get_stored_receipt(wa_id):
     """Retrieve stored receipt details for a user."""
-    with shelve.open("receipts_db") as receipts_shelf:
+    with state_lock(), shelve.open(RECEIPTS_DB) as receipts_shelf:
         return receipts_shelf.get(wa_id, None)
 
 def delete_stored_receipt(wa_id):
     """Delete stored receipt details for a user after processing."""
-    with shelve.open("receipts_db", writeback=True) as receipts_shelf:
+    with state_lock(), shelve.open(RECEIPTS_DB, writeback=True) as receipts_shelf:
         if wa_id in receipts_shelf:
             del receipts_shelf[wa_id]
 
@@ -1412,27 +1668,12 @@ def process_image_message(message, name, creds, sender_waid, folder_id):
                     
                     # Send the formatted message with the receipt number
                     first_name = get_first_name(name)
-                    confirmation_message = (
-                        f"Hi {first_name}! I've extracted the following details from your receipt:\n\n"
+                    review_message = (
+                        f"Hi {first_name}! Here's what I read from your receipt:\n\n"
                         f"{formatted_message}\n\n"
-                        f"Receipt #{receipt_number} has been created.\n\n"
-                        f"✏️ To add or correct information, reply with any of these fields:\n"
-                        f"What:\n"
-                        f"Amount:\n"
-                        f"IVA:\n"
-                        f"When:\n"
-                        f"Store name:\n"
-                        f"Company:\n"
-                        f"Payment method:\n"
-                        f"Charge to:\n"
-                        f"Invoice number:\n"
-                        f"Supplier ID:\n"
-                        f"Comments:\n\n"
-                        f"✅ To confirm without adding information, reply \"confirm\" or \"yes\".\n"
-                        f"❌ To cancel this receipt, reply \"cancel\" or \"no\"."
+                        f"Receipt #{receipt_number} has been created."
                     )
-                    data = get_text_message_input(sender_waid, confirmation_message)
-                    send_message(data)
+                    send_receipt_review(sender_waid, review_message, receipt_number)
                     
                     # Update admins
                     admin_message = f"{name} sent a receipt image. Details extracted:\n\n{formatted_message}\n\nReceipt {receipt_number} created."
@@ -1625,27 +1866,12 @@ def process_document_message(message, name, creds, sender_waid, folder_id):
                     
                     # Send the formatted message with the receipt number
                     first_name = get_first_name(name)
-                    confirmation_message = (
-                        f"Hi {first_name}! I've extracted the following details from your receipt:\n\n"
+                    review_message = (
+                        f"Hi {first_name}! Here's what I read from your receipt:\n\n"
                         f"{formatted_message}\n\n"
-                        f"Receipt #{receipt_number} has been created.\n\n"
-                        f"✏️ To add or correct information, reply with any of these fields:\n"
-                        f"What:\n"
-                        f"Amount:\n"
-                        f"IVA:\n"
-                        f"When:\n"
-                        f"Company:\n"
-                        f"Store name:\n"
-                        f"Payment method:\n"
-                        f"Charge to:\n"
-                        f"Invoice number:\n"
-                        f"Supplier ID:\n"
-                        f"Comments:\n\n"
-                        f"✅ To confirm without adding information, reply \"confirm\" or \"yes\".\n"
-                        f"❌ To cancel this receipt, reply \"cancel\" or \"no\"."
+                        f"Receipt #{receipt_number} has been created."
                     )
-                    data = get_text_message_input(sender_waid, confirmation_message)
-                    send_message(data)
+                    send_receipt_review(sender_waid, review_message, receipt_number)
                     
                     # Update admins
                     admin_message = f"{name} sent a receipt document. Details extracted:\n\n{formatted_message}\n\nReceipt {receipt_number} created."
@@ -1696,14 +1922,18 @@ def handle_receipt_confirmation(sender_waid, text, creds, name):
     update_data = prepare_for_google_sheets(stored_receipt)
     logging.info(f"Prepared data for Google Sheets: {update_data}")
     
+    # Write to Google Sheets
+    receipt_num = append_to_sheet(creds, sheet_id, update_data)
+    first_name = get_first_name(name)
+    if receipt_num is None:
+        data = get_text_message_input(sender_waid, f"Sorry {first_name}, I couldn't save your receipt to the spreadsheet just now. Your details are kept - please reply \"confirm\" again in a minute.")
+        send_message(data)
+        return True
+    
     # Remove the stored receipt
     delete_stored_receipt(sender_waid)
     
-    # Write to Google Sheets
-    receipt_num = append_to_sheet(creds, sheet_id, update_data)
-    
     # Send confirmation
-    first_name = get_first_name(name)
     confirm_message = f"Thank you {first_name}! I've saved your receipt details. Your receipt number is {receipt_num}."
     data = get_text_message_input(sender_waid, confirm_message)
     send_message(data)

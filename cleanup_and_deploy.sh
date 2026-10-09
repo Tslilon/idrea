@@ -108,26 +108,10 @@ fi
 # Ensure SSH key has correct permissions
 chmod 600 "$SSH_KEY"
 
-# Step 1: Clean up the server
+# Step 1: Clean up the server (the running bot keeps serving until the new image is built)
 echo "Step 1: Cleaning up the server..."
 ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << 'EOF'
-    # Stop all running containers
-    echo "Stopping all Docker containers..."
-    CONTAINERS=$(docker ps -q)
-    if [ ! -z "$CONTAINERS" ]; then
-        echo $CONTAINERS
-        docker stop $CONTAINERS
-    fi
-    
-    # Remove all containers
-    echo "Removing all Docker containers..."
-    CONTAINERS=$(docker ps -a -q)
-    if [ ! -z "$CONTAINERS" ]; then
-        echo $CONTAINERS
-        docker rm $CONTAINERS
-    fi
-    
-    # Clean up unused Docker resources
+    # Clean up dangling Docker resources (running containers and their images are kept)
     echo "Cleaning up unused Docker resources..."
     docker system prune -f
     
@@ -251,87 +235,92 @@ ssh -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" << EOF
         cp -r ~/deployment/idrea/data/* data/ || true
     fi
 
-    # Stop and remove any existing container
-    echo "Stopping existing container..."
+    # Build the new image while the current container keeps serving.
+    # If the build fails we stop here and production is untouched.
+    echo "Building Docker image on the server..."
+    if ! docker build -t nadlan-bot:new .; then
+        echo "❌ Build failed - the running container was not touched."
+        exit 1
+    fi
+
+    # Bot state used to live inside the container; carry it over to the data volume once
+    for f in receipts_db latest_receipt_number.txt; do
+        if [ ! -e ~/deployment/idrea/data/\$f ] && docker exec nadlan-bot test -e /app/\$f 2>/dev/null; then
+            echo "Migrating \$f to the data volume"
+            docker cp nadlan-bot:/app/\$f ~/deployment/idrea/data/\$f
+        fi
+    done
+
+    # Keep the current image for rollback
+    docker image inspect nadlan-bot:latest >/dev/null 2>&1 && docker tag nadlan-bot:latest nadlan-bot:rollback
+    docker tag nadlan-bot:new nadlan-bot:latest
+
+    # Swap containers
+    echo "Replacing the running container..."
     docker stop nadlan-bot || true
     docker rm nadlan-bot || true
     docker stop nadlanbot || true
     docker rm nadlanbot || true
-    
-    # Clean up unused Docker resources
-    docker system prune -f
-    
-    # Build Docker image on the server
-    echo "Building Docker image on the server..."
-    docker build -t nadlan-bot:latest .
-    
-    # Check if port is already in use and find an alternative if needed
-    if netstat -tuln | grep -q ":$PORT "; then
-        echo "Warning: Port $PORT is already in use."
-        echo "Using alternative port: 8001"
-        PORT=8001
-        
-        # Check if alternative port is also in use
-        if netstat -tuln | grep -q ":$PORT "; then
-            echo "Warning: Port $PORT is also in use."
-            echo "Using alternative port: 8002"
-            PORT=8002
-        fi
-    fi
-    
-    # Run the new container with volume mounts for important files
-    echo "Starting container on port $PORT..."
-    
+
     # If logging is enabled, set up log redirection
+    LOG_MAX_SIZE=50m
+    LOG_MAX_FILE=2
     if [ "$ENABLE_LOGGING" = "true" ]; then
-        # Create a log file with timestamp
+        LOG_MAX_SIZE=100m
+        LOG_MAX_FILE=3
+    fi
+    docker run -d \
+      --name nadlan-bot \
+      --restart unless-stopped \
+      -p $PORT:8000 \
+      -v ~/deployment/idrea/.env:/app/.env \
+      -v ~/deployment/idrea/data:/app/data \
+      -v ~/deployment/idrea/token.json:/app/token.json \
+      --log-driver json-file \
+      --log-opt max-size=\$LOG_MAX_SIZE \
+      --log-opt max-file=\$LOG_MAX_FILE \
+      nadlan-bot:latest
+
+    # Health check; roll back to the previous image if the new one doesn't come up
+    HEALTHY=false
+    for i in \$(seq 1 20); do
+        if curl -sf http://localhost:$PORT/health >/dev/null; then HEALTHY=true; break; fi
+        sleep 3
+    done
+    if [ "\$HEALTHY" != "true" ]; then
+        echo "❌ New container is not healthy - rolling back"
+        docker logs --tail 50 nadlan-bot || true
+        docker stop nadlan-bot || true
+        docker rm nadlan-bot || true
+        docker tag nadlan-bot:rollback nadlan-bot:latest
+        docker run -d --name nadlan-bot --restart unless-stopped -p $PORT:8000 \
+          -v ~/deployment/idrea/.env:/app/.env \
+          -v ~/deployment/idrea/data:/app/data \
+          -v ~/deployment/idrea/token.json:/app/token.json \
+          --log-driver json-file --log-opt max-size=\$LOG_MAX_SIZE --log-opt max-file=\$LOG_MAX_FILE \
+          nadlan-bot:latest
+        exit 1
+    fi
+    echo "✅ New container is healthy"
+
+    if [ "$ENABLE_LOGGING" = "true" ]; then
+        # Set up continuous log streaming to persistent file in background
         LOG_FILE=~/logs/nadlan-bot-\$(date +%Y-%m-%d_%H-%M-%S).log
         mkdir -p ~/logs
         touch \$LOG_FILE
         chmod 666 \$LOG_FILE
-        
-        # Start container normally without redirecting startup output
-        docker run -d \
-          --name nadlan-bot \
-          --restart unless-stopped \
-          -p $PORT:8000 \
-          -v ~/deployment/idrea/.env:/app/.env \
-          -v ~/deployment/idrea/data:/app/data \
-          -v ~/deployment/idrea/token.json:/app/token.json \
-          --log-driver json-file \
-          --log-opt max-size=100m \
-          --log-opt max-file=3 \
-          nadlan-bot:latest
-        
-        # Set up continuous log streaming to persistent file in background
-        echo "Setting up continuous log streaming to: \$LOG_FILE"
         nohup docker logs -f nadlan-bot >> \$LOG_FILE 2>&1 &
-        
         echo "Logs will be saved to: \$LOG_FILE"
-        echo "You can view logs with: docker logs nadlan-bot"
-        echo "Or view persistent logs with: tail -f \$LOG_FILE"
-    else
-        # Run without persistent logging but with Docker log limits
-        docker run -d \
-          --name nadlan-bot \
-          --restart unless-stopped \
-          -p $PORT:8000 \
-          -v ~/deployment/idrea/.env:/app/.env \
-          -v ~/deployment/idrea/data:/app/data \
-          -v ~/deployment/idrea/token.json:/app/token.json \
-          --log-driver json-file \
-          --log-opt max-size=50m \
-          --log-opt max-file=2 \
-          nadlan-bot:latest
     fi
-    
+
     # Verify container is running
     docker ps | grep nadlan-bot
-    
+    echo "To roll back: docker tag nadlan-bot:rollback nadlan-bot:latest and re-run the container"
+
     # Clean up unnecessary files
     echo "Cleaning up unnecessary files from ~/deployment/idrea..."
     rm -f nadlan-bot.tar || true
-    
+
     # Output success message
     echo "Container is available at: http://$SSH_HOST:$PORT"
 EOF

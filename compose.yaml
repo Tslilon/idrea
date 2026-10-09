@@ -19,6 +19,8 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL}
+      - WEBHOOK_SIGNATURE_MODE=${WEBHOOK_SIGNATURE_MODE:-log}
       - GOOGLE_SERVICE_ACCOUNT_FILE=${GOOGLE_SERVICE_ACCOUNT_FILE}
       - GOOGLE_CREDENTIALS_JSON=${GOOGLE_CREDENTIALS_JSON}
       - GOOGLE_SHEET_ID=${GOOGLE_SHEET_ID}
@@ -30,7 +32,7 @@ services:
       - PHONE_NUMBER_ID=${PHONE_NUMBER_ID}
       - VERIFY_TOKEN=${VERIFY_TOKEN}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3

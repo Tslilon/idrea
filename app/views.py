@@ -15,19 +15,21 @@ webhook_blueprint = Blueprint("webhook", __name__)
 
 
 def get_real_ip():
-    """Get the real IP address from X-Forwarded-For header when behind a proxy"""
-    if request.headers.get('X-Forwarded-For'):
-        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
-    elif request.headers.get('X-Real-IP'):
+    """Get the client IP when behind nginx (X-Real-IP is set by nginx and can't be spoofed by the client)"""
+    if request.headers.get('X-Real-IP'):
         return request.headers.get('X-Real-IP')
+    elif request.headers.get('X-Forwarded-For'):
+        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
     else:
         return get_remote_address()
 
 
-# Initialize limiter for this blueprint
+# Initialized with the app in create_app(). Per-route limits below replace the defaults.
 limiter = Limiter(
     key_func=get_real_ip,
-    storage_uri="memory://"
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://",
+    headers_enabled=True  # Enable rate limit headers in response
 )
 
 
@@ -164,9 +166,8 @@ def webhook_get():
     return verify()
 
 @webhook_blueprint.route("/webhook", methods=["POST"])
-@limiter.limit("100 per minute")  # Allow legitimate WhatsApp messages
-# Temporarily commenting out the signature_required decorator to see if that's the issue
-# @signature_required
+@limiter.exempt  # Every delivery from Meta (messages and status updates) must get through
+@signature_required
 def webhook_post():
     logging.debug("Received webhook POST request")
     try:
@@ -220,7 +221,7 @@ def health_check():
 # Add a rate-limited catch-all route for security scanning attempts
 @webhook_blueprint.route('/', defaults={'path': ''})
 @webhook_blueprint.route('/<path:path>')
-@limiter.limit("5 per minute")  # Very restrictive for unknown paths
+@limiter.limit("5 per minute;50 per hour")  # Very restrictive for unknown paths
 def catch_all(path):
     """
     Catch-all route for security scanning attempts.
