@@ -48,9 +48,9 @@ PALETTES = {
 # anyone else gets the general ones.
 PERSONAL_LINES = {
     "andrea": [
-        "Andrea and iDrea: practically the same name, definitely the same efficiency. 💫",
-        "Another one filed by Andrea. The spreadsheet is visibly happier.",
-        "Andrea, the undisputed receipt champion of the team. 🏆",
+        "We hope that some day bots and AI will be as efficient as Andrea. 💙",
+        "Andrea, thank you for everything you do - this team is lucky to have you. ❤️",
+        "Andrea, you are the heart of this operation. With love from all of us. 💙",
     ],
     "pablo": [
         "Pablo strikes again. The receipts never stood a chance. 🎯",
