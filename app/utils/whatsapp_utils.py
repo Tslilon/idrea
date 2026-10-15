@@ -22,7 +22,7 @@ from app.services.receipt_extraction_service import (
     format_extracted_details_for_whatsapp,
     prepare_for_google_sheets
 )
-from app.services import easter_eggs
+from app.services import commands, easter_eggs
 
 # Additional imports and code
 # from app.services.openai_service import generate_response
@@ -681,6 +681,11 @@ def process_text_message(text, name, creds, sender_waid):
         send_message(data)
         return
     
+    # Typed commands: help, links, sheet, folder, status (read-only, fine while a receipt is pending)
+    command = commands.parse(text)
+    if command and commands.handle(command, text, name, creds, sender_waid, stored_receipt):
+        return
+
     # Hidden replies to a few words (only when nothing is waiting for confirmation)
     if not stored_receipt and easter_eggs.handle_keyword(text, sender_waid, name):
         return

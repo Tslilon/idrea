@@ -93,6 +93,10 @@ class FakeGoogle:
                     return {"id": file_id}
                 return FakeRequest(run)
 
+            def list(self, q, orderBy, pageSize, fields):
+                newest_first = reversed(list(google.drive_files.items()))
+                return FakeRequest(lambda: {"files": [{"id": i, "name": f["name"]} for i, f in newest_first][:pageSize]})
+
             def delete(self, fileId):
                 def run():
                     google.deleted_files.append(fileId)

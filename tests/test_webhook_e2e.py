@@ -257,3 +257,52 @@ def test_manual_form_entry_saves_row(world):
 def test_confirm_without_pending(world):
     world.send_text("confirm")
     assert "don't have any pending" in world.last_to_user()
+
+
+# ---------------------------------------------------------------- commands
+
+@pytest.mark.parametrize("text", ["help", "/help", "/ help", "Help", "menu"])
+def test_help_command(world, text):
+    world.send_text(text)
+    reply = world.last_to_user()
+    assert "links" in reply and "confirm" in reply and "Dana" in reply
+
+
+def test_help_works_while_receipt_pending(world):
+    world.send_image(jpeg_bytes())
+    world.send_text("/help")
+    assert "Commands" in world.last_to_user()
+    assert world.pending() is not None
+
+
+def test_sheet_and_folder_commands(world):
+    world.send_text("/sheet")
+    assert "docs.google.com/spreadsheets/d/sheet-id" in world.last_to_user()
+    world.send_text("/folder")
+    assert "drive.google.com/drive/folders/folder-id" in world.last_to_user()
+
+
+def test_links_lists_five_latest_saved_receipts(world):
+    world.google.sheet_rows = [[2549], [2550]]
+    for _ in range(7):
+        world.send_image(jpeg_bytes())
+        world.press("receipt_confirm")
+    world.send_text("links")
+    reply = world.last_to_user()
+    assert "spreadsheets/d/sheet-id" in reply and "folders/folder-id" in reply
+    numbers = [line.split(":")[0] for line in reply.splitlines() if line.startswith("#")]
+    assert numbers == ["#2557", "#2556", "#2555", "#2554", "#2553"]
+
+
+def test_links_skips_unconfirmed_upload(world):
+    world.send_image(jpeg_bytes())  # uploaded, still pending
+    world.send_text("/links")
+    assert "No saved receipts" in world.last_to_user()
+
+
+def test_status_command(world):
+    world.send_text("status")
+    assert "Nothing waiting" in world.last_to_user()
+    world.send_image(jpeg_bytes())
+    world.send_text("status")
+    assert "waiting for you" in world.last_to_user()
